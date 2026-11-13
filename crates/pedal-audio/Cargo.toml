@@ -1,0 +1,11 @@
+[package]
+name = "pedal-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cpal.workspace = true
+log.workspace = true
+rtrb.workspace = true
+thiserror.workspace = true

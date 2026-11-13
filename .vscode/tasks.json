@@ -1,0 +1,50 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo: build chronomix (debug)",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build",
+                "--bin",
+                "chronomix"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "cargo: build chronomix (release)",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build",
+                "--release",
+                "--bin",
+                "chronomix"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "cargo: test workspace",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "test",
+                "--workspace"
+            ],
+            "group": "test",
+            "problemMatcher": [
+                "$rustc"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+[package]
+name = "pedal-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "chronomix"
+path = "src/main.rs"
+
+[dependencies]
+eframe.workspace = true
+egui.workspace = true
+env_logger.workspace = true
+log.workspace = true
+pedal-audio = { path = "../pedal-audio" }
+pedal-engine = { path = "../pedal-engine" }
+rfd.workspace = true
+vst3-host.workspace = true
