@@ -17,7 +17,11 @@ use eframe::egui::{
 };
 use i18n::Lang;
 use pedal_audio::AudioDeviceInfo;
-use pedal_engine::{LoadedPluginMeta, MeterSnapshot, PedalEngine};
+use pedal_engine::{
+    LoadedPluginMeta, MeterSnapshot, PedalEngine, WineAction, WineBridgeMode, WineConfig,
+    WineEnvironmentStatus, initialize_wine_prefix, inspect_wine_environment,
+    launch_wine_executable, launch_wine_tool, rebuild_wine_bridge,
+};
 use theme::{
     StudioIcon, StudioPalette, animated_action_button, animated_led_toggle, apply_studio_theme,
     draw_animated_signal_pipe, draw_rotary_knob, draw_studio_vu_meter, draw_vector_icon,
@@ -53,11 +57,34 @@ enum ActivePanel {
     Settings,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+fn default_true_setting() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct AppSettings {
     custom_vst_dir: Option<PathBuf>,
     include_system_vst: bool,
     lang: Option<String>,
+    #[serde(default)]
+    wine_prefix: Option<PathBuf>,
+    #[serde(default)]
+    wine_binary: Option<PathBuf>,
+    #[serde(default = "default_true_setting")]
+    wine_auto_display: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            custom_vst_dir: None,
+            include_system_vst: false,
+            lang: None,
+            wine_prefix: None,
+            wine_binary: None,
+            wine_auto_display: true,
+        }
+    }
 }
 
 impl AppSettings {
@@ -105,6 +132,7 @@ enum StatusState {
     RecordingTo(PathBuf),
     OpenedFolder(PathBuf),
     UpdatedVstFolder(PathBuf),
+    Plain(String),
 }
 
 impl StatusState {
@@ -128,6 +156,7 @@ impl StatusState {
             Self::RecordingTo(path) => lang.recording_to_status(path),
             Self::OpenedFolder(path) => lang.opened_folder_status(path),
             Self::UpdatedVstFolder(path) => lang.vst_folder_updated_status(path),
+            Self::Plain(msg) => msg.clone(),
         }
     }
 }
@@ -156,6 +185,11 @@ impl ErrorState {
     }
 }
 
+struct WineTaskResult {
+    rescan_plugins: bool,
+    outcome: Result<String, String>,
+}
+
 struct ChronomixApp {
     theme_initialized: bool,
     lang: Lang,
@@ -164,6 +198,14 @@ struct ChronomixApp {
     program_vst_dir: PathBuf,
     custom_vst_dir: Option<PathBuf>,
     include_system_vst: bool,
+
+    wine_config: WineConfig,
+    wine_status: Option<WineEnvironmentStatus>,
+    wine_status_slot: Arc<Mutex<Option<WineEnvironmentStatus>>>,
+    wine_status_refreshing: bool,
+    wine_task_slot: Arc<Mutex<Option<WineTaskResult>>>,
+    wine_busy_msg: Option<String>,
+    show_wine_paths: bool,
 
     engine: PedalEngine,
     input_devices: Vec<AudioDeviceInfo>,
@@ -245,7 +287,14 @@ impl ChronomixApp {
             .filter(|p| std::fs::create_dir_all(p).is_ok() || p.is_dir());
         let include_system_vst = settings.include_system_vst;
 
-        let engine = PedalEngine::new();
+        let wine_config = WineConfig {
+            wine_binary: settings.wine_binary,
+            wine_prefix: settings.wine_prefix,
+            auto_display: settings.wine_auto_display,
+        };
+
+        let mut engine = PedalEngine::new();
+        engine.set_wine_config(wine_config.clone());
         let active_dir = custom_vst_dir
             .clone()
             .unwrap_or_else(|| program_vst_dir.clone());
@@ -264,13 +313,20 @@ impl ChronomixApp {
         let selected_output =
             pick_best_default_device(&output_devices, engine.default_output_device(), false);
 
-        Self {
+        let mut app = Self {
             theme_initialized: false,
             lang,
             active_panel: ActivePanel::News,
             program_vst_dir,
             custom_vst_dir,
             include_system_vst,
+            wine_config,
+            wine_status: None,
+            wine_status_slot: Arc::new(Mutex::new(None)),
+            wine_status_refreshing: false,
+            wine_task_slot: Arc::new(Mutex::new(None)),
+            wine_busy_msg: None,
+            show_wine_paths: false,
             engine,
             input_devices,
             output_devices,
@@ -296,7 +352,11 @@ impl ChronomixApp {
             param_filter: String::new(),
             status: StatusState::Ready,
             error: None,
+        };
+        if cfg!(target_os = "linux") {
+            app.refresh_wine_status();
         }
+        app
     }
 
     fn active_vst_dir(&self) -> PathBuf {
@@ -310,8 +370,97 @@ impl ChronomixApp {
             custom_vst_dir: self.custom_vst_dir.clone(),
             include_system_vst: self.include_system_vst,
             lang: Some(self.lang.code().to_string()),
+            wine_prefix: self.wine_config.wine_prefix.clone(),
+            wine_binary: self.wine_config.wine_binary.clone(),
+            wine_auto_display: self.wine_config.auto_display,
         };
         settings.save();
+    }
+
+    fn sync_and_save_wine_config(&mut self) {
+        self.engine.set_wine_config(self.wine_config.clone());
+        self.save_settings();
+        self.refresh_wine_status();
+        if self.include_system_vst {
+            self.start_scan();
+        }
+    }
+
+    fn refresh_wine_status(&mut self) {
+        if self.wine_status_refreshing {
+            return;
+        }
+        self.wine_status_refreshing = true;
+        let slot = Arc::clone(&self.wine_status_slot);
+        let cfg = self.wine_config.clone();
+        thread::spawn(move || {
+            let inspected = inspect_wine_environment(&cfg);
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(inspected);
+            }
+        });
+    }
+
+    fn spawn_wine_task(
+        &mut self,
+        busy_label: String,
+        rescan_plugins: bool,
+        job: impl FnOnce(WineConfig) -> Result<String, String> + Send + 'static,
+    ) {
+        if self.wine_busy_msg.is_some() {
+            return;
+        }
+        self.wine_busy_msg = Some(busy_label.clone());
+        self.status = StatusState::Plain(busy_label);
+        self.error = None;
+        let slot = Arc::clone(&self.wine_task_slot);
+        let cfg = self.wine_config.clone();
+        thread::spawn(move || {
+            let outcome = job(cfg);
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(WineTaskResult {
+                    rescan_plugins,
+                    outcome,
+                });
+            }
+        });
+    }
+
+    fn poll_wine_tasks(&mut self) {
+        if self.wine_status_refreshing {
+            let status_update = self
+                .wine_status_slot
+                .try_lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
+            if let Some(inspected) = status_update {
+                self.wine_status = Some(inspected);
+                self.wine_status_refreshing = false;
+            }
+        }
+        if self.wine_busy_msg.is_some() {
+            let task_done = self
+                .wine_task_slot
+                .try_lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
+            if let Some(done) = task_done {
+                self.wine_busy_msg = None;
+                match done.outcome {
+                    Ok(msg) => {
+                        self.status = StatusState::Plain(msg);
+                        self.error = None;
+                        if done.rescan_plugins {
+                            self.start_scan();
+                        }
+                    }
+                    Err(err) => {
+                        self.error = Some(ErrorState::Plain(err));
+                    }
+                }
+                self.refresh_wine_status();
+            }
+        }
     }
 
     fn open_active_vst_folder(&mut self) {
@@ -418,8 +567,10 @@ impl ChronomixApp {
         let slot = Arc::clone(&self.scan_in_progress);
         let vst_dir = self.active_vst_dir();
         let include_system = self.include_system_vst;
+        let wine_config = self.wine_config.clone();
         thread::spawn(move || {
-            let temp_engine = PedalEngine::new();
+            let mut temp_engine = PedalEngine::new();
+            temp_engine.set_wine_config(wine_config);
             let found = temp_engine.discover_plugins(&vst_dir, include_system);
             if let Ok(mut guard) = slot.lock() {
                 *guard = Some(found);
@@ -1056,24 +1207,7 @@ impl ChronomixApp {
                             } else {
                                 (t.settings_mode_program, StudioPalette::ACCENT_EMERALD)
                             };
-                            egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(
-                                    badge_color.r(),
-                                    badge_color.g(),
-                                    badge_color.b(),
-                                    40,
-                                ))
-                                .stroke(Stroke::new(1.0_f32, badge_color))
-                                .corner_radius(CornerRadius::same(2))
-                                .inner_margin(Margin::symmetric(8, 2))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new(badge_text)
-                                            .small()
-                                            .strong()
-                                            .color(badge_color),
-                                    );
-                                });
+                            draw_status_pill(ui, badge_text, badge_color);
                         });
 
                         ui.add_space(4.0);
@@ -1225,6 +1359,11 @@ impl ChronomixApp {
                 );
 
                 ui.add_space(12.0);
+
+                if cfg!(target_os = "linux") {
+                    self.render_wine_settings_card(ui);
+                    ui.add_space(12.0);
+                }
 
                 // Detected Plugins Header + Search Filter (wraps cleanly on narrow windows)
                 ui.horizontal_wrapped(|ui| {
@@ -1387,6 +1526,563 @@ impl ChronomixApp {
                     }
                 }
             });
+    }
+
+    fn render_wine_settings_card(&mut self, ui: &mut egui::Ui) {
+        let t = self.lang.text();
+        let status_opt = self.wine_status.clone();
+        let wine_busy = self.wine_busy_msg.is_some();
+
+        studio_card(
+            ui,
+            Some(StudioPalette::ACCENT_CYAN),
+            Margin::same(14),
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    icon_heading(
+                        ui,
+                        StudioIcon::Bolt,
+                        StudioPalette::ACCENT_CYAN,
+                        t.settings_wine_heading,
+                        16.5,
+                    );
+
+                    if let Some(ref st) = status_opt {
+                        if st.active_wine_binary.is_none() {
+                            draw_status_pill(
+                                ui,
+                                t.settings_wine_status_missing,
+                                StudioPalette::ACCENT_CRIMSON,
+                            );
+                        } else if st.active_prefix_initialized {
+                            draw_status_pill(
+                                ui,
+                                t.settings_wine_status_ready,
+                                StudioPalette::ACCENT_EMERALD,
+                            );
+                        } else {
+                            draw_status_pill(
+                                ui,
+                                t.settings_wine_status_uninit,
+                                StudioPalette::ACCENT_AMBER,
+                            );
+                        }
+
+                        if st.wayland_x11_configured {
+                            draw_status_pill(
+                                ui,
+                                t.settings_wine_driver_ok,
+                                StudioPalette::ACCENT_CYAN,
+                            );
+                        } else {
+                            draw_status_pill(
+                                ui,
+                                t.settings_wine_driver_pending,
+                                StudioPalette::ACCENT_AMBER,
+                            );
+                        }
+
+                        let (bridge_lbl, bridge_col) = match st.bridge_mode {
+                            WineBridgeMode::EmbeddedPrebuilt => {
+                                (t.settings_wine_bridge_prebuilt, StudioPalette::ACCENT_EMERALD)
+                            }
+                            WineBridgeMode::RuntimeCached => {
+                                (t.settings_wine_bridge_cached, StudioPalette::ACCENT_CYAN)
+                            }
+                            WineBridgeMode::CanCompileAtRuntime => {
+                                (t.settings_wine_bridge_compile, StudioPalette::ACCENT_BLUE)
+                            }
+                            WineBridgeMode::Unavailable => {
+                                (t.settings_wine_bridge_missing, StudioPalette::ACCENT_CRIMSON)
+                            }
+                        };
+                        draw_status_pill(ui, bridge_lbl, bridge_col);
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(t.settings_wine_desc)
+                            .small()
+                            .color(StudioPalette::TEXT_SECONDARY),
+                    )
+                    .wrap(),
+                );
+
+                if let Some(ref st) = status_opt {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(t.settings_wine_session_label)
+                                .small()
+                                .color(StudioPalette::TEXT_MUTED),
+                        );
+                        ui.label(
+                            RichText::new(&st.display_session)
+                                .small()
+                                .monospace()
+                                .color(StudioPalette::ACCENT_CYAN),
+                        );
+                        if let Some(ref ver) = st.active_wine_version {
+                            ui.label(
+                                RichText::new(format!("• {ver}"))
+                                    .small()
+                                    .monospace()
+                                    .color(StudioPalette::TEXT_SECONDARY),
+                            );
+                        }
+                    });
+                }
+
+                ui.add_space(8.0);
+                let combo_w = (ui.available_width() - 18.0).clamp(150.0, 440.0);
+
+                // Wine runner selector
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(t.settings_wine_runner_label)
+                            .strong()
+                            .color(StudioPalette::TEXT_SECONDARY),
+                    );
+                    let runner_text = match &self.wine_config.wine_binary {
+                        None => {
+                            let auto_suffix = status_opt
+                                .as_ref()
+                                .and_then(|s| s.active_wine_version.as_deref())
+                                .unwrap_or("");
+                            if auto_suffix.is_empty() {
+                                t.settings_wine_auto_label.to_string()
+                            } else {
+                                format!("{} ({auto_suffix})", t.settings_wine_auto_label)
+                            }
+                        }
+                        Some(p) => status_opt
+                            .as_ref()
+                            .and_then(|s| s.available_runners.iter().find(|r| &r.path == p))
+                            .map(|r| r.label.clone())
+                            .unwrap_or_else(|| p.display().to_string()),
+                    };
+
+                    let mut next_runner: Option<Option<PathBuf>> = None;
+                    egui::ComboBox::from_id_salt("wine_runner_combo")
+                        .width(combo_w)
+                        .selected_text(runner_text)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.wine_config.wine_binary.is_none(),
+                                    t.settings_wine_auto_label,
+                                )
+                                .clicked()
+                            {
+                                next_runner = Some(None);
+                            }
+                            if let Some(ref st) = status_opt {
+                                for runner in &st.available_runners {
+                                    let selected = self
+                                        .wine_config
+                                        .wine_binary
+                                        .as_ref()
+                                        .is_some_and(|p| p == &runner.path);
+                                    if ui.selectable_label(selected, &runner.label).clicked() {
+                                        next_runner = Some(Some(runner.path.clone()));
+                                    }
+                                }
+                            }
+                        });
+                    if let Some(chosen) = next_runner {
+                        self.wine_config.wine_binary = chosen;
+                        self.sync_and_save_wine_config();
+                    }
+
+                    if animated_action_button(
+                        ui,
+                        "wine_choose_runner",
+                        Some(StudioIcon::File),
+                        t.settings_wine_choose_runner,
+                        StudioPalette::ACCENT_BLUE,
+                        false,
+                        Vec2::new(126.0, 26.0),
+                    )
+                    .clicked()
+                    {
+                        if let Some(bin) = rfd::FileDialog::new()
+                            .set_title(t.dialog_select_wine_runner)
+                            .set_directory("/usr/bin")
+                            .pick_file()
+                        {
+                            self.wine_config.wine_binary = Some(bin);
+                            self.sync_and_save_wine_config();
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+
+                // WINEPREFIX selector
+                let resolved_prefix = status_opt
+                    .as_ref()
+                    .and_then(|s| s.active_prefix.clone())
+                    .or_else(|| self.wine_config.wine_prefix.clone());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(t.settings_wine_prefix_label)
+                            .strong()
+                            .color(StudioPalette::TEXT_SECONDARY),
+                    );
+                    let prefix_text = match &self.wine_config.wine_prefix {
+                        None => match &resolved_prefix {
+                            Some(p) => format!("{} — {}", t.settings_wine_auto_label, p.display()),
+                            None => t.settings_wine_auto_label.to_string(),
+                        },
+                        Some(p) => p.display().to_string(),
+                    };
+
+                    let mut next_prefix: Option<Option<PathBuf>> = None;
+                    egui::ComboBox::from_id_salt("wine_prefix_combo")
+                        .width(combo_w)
+                        .selected_text(prefix_text)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.wine_config.wine_prefix.is_none(),
+                                    t.settings_wine_auto_label,
+                                )
+                                .clicked()
+                            {
+                                next_prefix = Some(None);
+                            }
+                            if let Some(ref st) = status_opt {
+                                for pref in &st.available_prefixes {
+                                    let selected = self
+                                        .wine_config
+                                        .wine_prefix
+                                        .as_ref()
+                                        .is_some_and(|p| p == &pref.path);
+                                    let mark = if pref.initialized { "[OK]" } else { "[--]" };
+                                    let label =
+                                        format!("{mark} {} — {}", pref.name, pref.path.display());
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        next_prefix = Some(Some(pref.path.clone()));
+                                    }
+                                }
+                            }
+                        });
+                    if let Some(chosen) = next_prefix {
+                        self.wine_config.wine_prefix = chosen;
+                        self.sync_and_save_wine_config();
+                    }
+
+                    if animated_action_button(
+                        ui,
+                        "wine_choose_prefix",
+                        Some(StudioIcon::Folder),
+                        t.settings_wine_choose_prefix,
+                        StudioPalette::ACCENT_BLUE,
+                        false,
+                        Vec2::new(124.0, 26.0),
+                    )
+                    .clicked()
+                    {
+                        if let Some(folder) = rfd::FileDialog::new()
+                            .set_title(t.dialog_select_wine_prefix)
+                            .pick_folder()
+                        {
+                            self.wine_config.wine_prefix = Some(folder);
+                            self.sync_and_save_wine_config();
+                        }
+                    }
+
+                    if (self.wine_config.wine_prefix.is_some()
+                        || self.wine_config.wine_binary.is_some())
+                        && animated_action_button(
+                            ui,
+                            "wine_reset_auto",
+                            Some(StudioIcon::Refresh),
+                            t.settings_wine_reset_auto,
+                            StudioPalette::ACCENT_AMBER,
+                            false,
+                            Vec2::new(92.0, 26.0),
+                        )
+                        .clicked()
+                    {
+                        self.wine_config.wine_prefix = None;
+                        self.wine_config.wine_binary = None;
+                        self.sync_and_save_wine_config();
+                    }
+
+                    if let Some(pref_dir) = resolved_prefix.clone() {
+                        if animated_action_button(
+                            ui,
+                            "wine_open_drive_c",
+                            Some(StudioIcon::Folder),
+                            t.settings_wine_open_drive_c,
+                            StudioPalette::ACCENT_CYAN,
+                            false,
+                            Vec2::new(118.0, 26.0),
+                        )
+                        .clicked()
+                        {
+                            let drive_c = pref_dir.join("drive_c");
+                            let target = if drive_c.is_dir() { drive_c } else { pref_dir };
+                            let _ = std::fs::create_dir_all(&target);
+                            if let Err(e) = open_folder_in_file_manager(&target) {
+                                self.error = Some(ErrorState::Plain(e));
+                            } else {
+                                self.status = StatusState::OpenedFolder(target);
+                                self.error = None;
+                            }
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                if animated_led_toggle(
+                    ui,
+                    "wine_auto_display_toggle",
+                    &mut self.wine_config.auto_display,
+                    t.settings_wine_auto_display,
+                    StudioPalette::ACCENT_CYAN,
+                ) {
+                    self.sync_and_save_wine_config();
+                }
+
+                ui.add_space(8.0);
+                if let Some(ref busy) = self.wine_busy_msg {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            RichText::new(busy)
+                                .small()
+                                .strong()
+                                .color(StudioPalette::ACCENT_AMBER),
+                        );
+                    });
+                    ui.add_space(6.0);
+                }
+
+                // Primary Wine Actions Row
+                ui.add_enabled_ui(!wine_busy, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if animated_action_button(
+                            ui,
+                            "wine_init_repair",
+                            Some(StudioIcon::Bolt),
+                            t.settings_wine_init_repair,
+                            StudioPalette::ACCENT_EMERALD,
+                            true,
+                            Vec2::new(188.0, 30.0),
+                        )
+                        .clicked()
+                        {
+                            let ok_msg = t.settings_wine_init_ok.to_string();
+                            self.spawn_wine_task(
+                                t.settings_wine_busy_init.to_string(),
+                                true,
+                                move |cfg| {
+                                    initialize_wine_prefix(&cfg)
+                                        .map(|p| format!("{ok_msg} ({})", p.display()))
+                                },
+                            );
+                        }
+
+                        if animated_action_button(
+                            ui,
+                            "wine_run_exe",
+                            Some(StudioIcon::Play),
+                            t.settings_wine_run_exe,
+                            StudioPalette::ACCENT_CYAN,
+                            false,
+                            Vec2::new(165.0, 30.0),
+                        )
+                        .clicked()
+                        {
+                            let mut dlg = rfd::FileDialog::new()
+                                .set_title(t.dialog_select_exe)
+                                .add_filter(
+                                    "Windows App / Installer (.exe, .msi)",
+                                    &["exe", "EXE", "msi", "MSI", "bat", "cmd"],
+                                );
+                            if let Some(ref pref) = resolved_prefix {
+                                let dc = pref.join("drive_c");
+                                if dc.is_dir() {
+                                    dlg = dlg.set_directory(dc);
+                                }
+                            }
+                            if let Some(file) = dlg.pick_file() {
+                                self.spawn_wine_task(
+                                    t.settings_wine_busy_run.to_string(),
+                                    true,
+                                    move |cfg| launch_wine_executable(&file, &cfg),
+                                );
+                            }
+                        }
+
+                        if animated_action_button(
+                            ui,
+                            "wine_open_winecfg",
+                            Some(StudioIcon::Gear),
+                            "winecfg",
+                            StudioPalette::ACCENT_BLUE,
+                            false,
+                            Vec2::new(98.0, 30.0),
+                        )
+                        .clicked()
+                        {
+                            self.spawn_wine_task(
+                                format!("{} (winecfg)", t.settings_wine_busy_tool),
+                                false,
+                                |cfg| launch_wine_tool(WineAction::Winecfg, &cfg),
+                            );
+                        }
+
+                        if animated_action_button(
+                            ui,
+                            "wine_open_explorer",
+                            Some(StudioIcon::Window),
+                            "Explorer",
+                            StudioPalette::ACCENT_BLUE,
+                            false,
+                            Vec2::new(104.0, 30.0),
+                        )
+                        .clicked()
+                        {
+                            self.spawn_wine_task(
+                                format!("{} (explorer)", t.settings_wine_busy_tool),
+                                false,
+                                |cfg| launch_wine_tool(WineAction::Explorer, &cfg),
+                            );
+                        }
+
+                        if animated_action_button(
+                            ui,
+                            "wine_rebuild_bridge",
+                            Some(StudioIcon::Refresh),
+                            t.settings_wine_rebuild_bridge,
+                            StudioPalette::ACCENT_PURPLE,
+                            false,
+                            Vec2::new(172.0, 30.0),
+                        )
+                        .clicked()
+                        {
+                            let ok_msg = t.settings_wine_bridge_rebuilt_ok.to_string();
+                            self.spawn_wine_task(
+                                t.settings_wine_busy_bridge.to_string(),
+                                false,
+                                move |cfg| {
+                                    rebuild_wine_bridge(&cfg)
+                                        .map(|(p, _)| format!("{ok_msg} ({})", p.display()))
+                                        .map_err(|e| e.to_string())
+                                },
+                            );
+                        }
+                    });
+
+                    ui.add_space(6.0);
+
+                    // Secondary Wine Utilities Row
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(t.settings_wine_tools_label)
+                                .small()
+                                .color(StudioPalette::TEXT_MUTED),
+                        );
+
+                        if status_opt.as_ref().is_some_and(|s| s.winetricks_available)
+                            && ui.small_button("Winetricks").clicked()
+                        {
+                            self.spawn_wine_task(
+                                format!("{} (winetricks)", t.settings_wine_busy_tool),
+                                true,
+                                |cfg| launch_wine_tool(WineAction::Winetricks, &cfg),
+                            );
+                        }
+                        if ui.small_button("CMD").clicked() {
+                            self.spawn_wine_task(
+                                format!("{} (cmd)", t.settings_wine_busy_tool),
+                                false,
+                                |cfg| launch_wine_tool(WineAction::Cmd, &cfg),
+                            );
+                        }
+                        if ui.small_button("Regedit").clicked() {
+                            self.spawn_wine_task(
+                                format!("{} (regedit)", t.settings_wine_busy_tool),
+                                false,
+                                |cfg| launch_wine_tool(WineAction::Regedit, &cfg),
+                            );
+                        }
+                        if ui.small_button("Uninstaller").clicked() {
+                            self.spawn_wine_task(
+                                format!("{} (uninstaller)", t.settings_wine_busy_tool),
+                                true,
+                                |cfg| launch_wine_tool(WineAction::Uninstaller, &cfg),
+                            );
+                        }
+                        if ui.small_button(t.settings_wine_kill_server).clicked() {
+                            self.spawn_wine_task(
+                                format!("{} (wineserver -k)", t.settings_wine_busy_tool),
+                                false,
+                                |cfg| launch_wine_tool(WineAction::KillServer, &cfg),
+                            );
+                        }
+                        if ui.small_button(t.refresh).clicked() {
+                            self.refresh_wine_status();
+                        }
+                    });
+                });
+
+                if let Some(ref st) = status_opt {
+                    if !st.vst_directories.is_empty() {
+                        ui.add_space(6.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} ({})",
+                                    t.settings_wine_vst_paths_title,
+                                    st.vst_directories.len()
+                                ))
+                                .clicked()
+                            {
+                                self.show_wine_paths = !self.show_wine_paths;
+                            }
+                        });
+                        if self.show_wine_paths {
+                            ui.add_space(4.0);
+                            egui::Frame::new()
+                                .fill(StudioPalette::BG_INPUT)
+                                .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
+                                .corner_radius(CornerRadius::same(2))
+                                .inner_margin(Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    for dir in &st.vst_directories {
+                                        let exists = dir.is_dir();
+                                        let (tag, col) = if exists {
+                                            ("[OK]", StudioPalette::ACCENT_EMERALD)
+                                        } else {
+                                            ("[--]", StudioPalette::TEXT_MUTED)
+                                        };
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(
+                                                RichText::new(tag)
+                                                    .small()
+                                                    .monospace()
+                                                    .color(col),
+                                            );
+                                            ui.label(
+                                                RichText::new(dir.display().to_string())
+                                                    .small()
+                                                    .monospace()
+                                                    .color(StudioPalette::TEXT_SECONDARY),
+                                            );
+                                        });
+                                    }
+                                });
+                        }
+                    }
+                }
+            },
+        );
     }
 
     /// Visual signal-flow bar (`Input -> VST Effect -> Output -> Record`) at the top of Recording.
@@ -2351,6 +3047,7 @@ impl eframe::App for ChronomixApp {
             self.theme_initialized = true;
         }
         self.poll_scan();
+        self.poll_wine_tasks();
         self.engine.service_plugin_window();
         self.update_meters();
 
@@ -2358,6 +3055,8 @@ impl eframe::App for ChronomixApp {
         if self.engine.is_audio_running()
             || self.engine.is_plugin_window_open()
             || self.is_scanning
+            || self.wine_busy_msg.is_some()
+            || self.wine_status_refreshing
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
@@ -2461,6 +3160,22 @@ impl eframe::App for ChronomixApp {
                 ActivePanel::Settings => self.render_settings_panel(ui),
             });
     }
+}
+
+fn draw_status_pill(ui: &mut egui::Ui, text: &str, color: Color32) {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            40,
+        ))
+        .stroke(Stroke::new(1.0_f32, color))
+        .corner_radius(CornerRadius::same(2))
+        .inner_margin(Margin::symmetric(8, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).small().strong().color(color));
+        });
 }
 
 fn open_folder_in_file_manager(path: &std::path::Path) -> Result<(), String> {

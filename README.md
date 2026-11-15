@@ -29,7 +29,7 @@ cargo test --workspace
 
 ### Linux Notes
 - Requires ALSA development headers (`libasound2-dev` / `alsa-lib-devel`), PipeWire (`pipewire-alsa` / `pipewire-pulse`) or PulseAudio for low-latency audio monitoring, and X11/Wayland/GTK3 dev libs for `eframe` and `rfd`.
-- For automatic 64-bit Windows `.vst3` support on Linux, ensure `wine` and `wineg++` are installed.
+- For automatic 64-bit Windows `.vst3` / `.dll` (VST2) support on Linux, ensure `wine` (and optionally `wineg++`) is installed. Chronomix's **Settings -> Wine** manager automatically detects `~/.wine`, Bottles, Lutris, Heroic, and custom prefixes, auto-configures `x11,wayland` graphics drivers for Wayland/Hyprland/X11 sessions, compiles the Winelib bridge at runtime if needed, and lets you initialize prefixes or launch `.exe`/`.msi` VST installers, `winecfg`, Explorer, and `winetricks` directly inside the app.
 
 ### Windows / macOS Notes
 - On Windows, WASAPI works out of the box; for ASIO support in `cpal`, enable `cpal`'s `asio` feature with the Steinberg ASIO SDK configured.

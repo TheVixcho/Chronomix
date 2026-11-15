@@ -146,8 +146,24 @@ if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     WARNINGS+=("No se detectó DISPLAY ni WAYLAND_DISPLAY en el entorno; la ventana gráfica podría no abrirse.")
 fi
 
-if ! command -v wineg++ >/dev/null 2>&1 || ! command -v wine >/dev/null 2>&1; then
-    WARNINGS+=("Falta wine/wineg++ (opcional): Chronomix funcionará, pero el puente para plugins VST3 de Windows (.vst3) quedará desactivado.")
+HAS_WINE=0
+for w in wine wine64 /opt/wine-staging/bin/wine /opt/wine-devel/bin/wine /opt/wine-stable/bin/wine; do
+    if command -v "$w" >/dev/null 2>&1 || [ -x "$w" ]; then
+        HAS_WINE=1
+        break
+    fi
+done
+
+HAS_WINEGPP=0
+for g in wineg++ /opt/wine-staging/bin/wineg++ /opt/wine-devel/bin/wineg++ /opt/wine-stable/bin/wineg++; do
+    if command -v "$g" >/dev/null 2>&1 || [ -x "$g" ]; then
+        HAS_WINEGPP=1
+        break
+    fi
+done
+
+if [ "$HAS_WINE" -eq 0 ] || [ "$HAS_WINEGPP" -eq 0 ]; then
+    WARNINGS+=("Falta wine/wineg++ (opcional): Chronomix funcionará con plugins nativos, y si instalas wine+wineg++ después podrás compilar el bridge e inicializar prefijos desde Ajustes.")
 fi
 
 if [ "${#WARNINGS[@]}" -gt 0 ]; then

@@ -7,6 +7,9 @@ use std::{
 use serde::Deserialize;
 use thiserror::Error;
 
+pub mod env;
+pub use env::*;
+
 /// Detected executable format of a VST3 plugin binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vst3BinaryKind {
@@ -29,7 +32,7 @@ pub struct ResolvedVst3Target {
 pub enum WineError {
     #[error("Wine VST3 bridge is only used on Linux")]
     UnsupportedOs,
-    #[error("Wine VST3 host was not compiled (wineg++ missing at build time)")]
+    #[error("Wine VST3 host was not compiled (wineg++ missing at build time and runtime)")]
     BridgeNotBuilt,
     #[error("32-bit (x86) Windows VST3 is not supported by this 64-bit Wine bridge: {0}. Use the 64-bit (x64) .vst3 instead.")]
     UnsupportedArch32(String),
@@ -278,7 +281,7 @@ fn first_matching_binary(
     None
 }
 
-#[cfg(all(target_os = "linux", has_wine_host))]
+#[cfg(target_os = "linux")]
 mod linux_impl {
     use super::*;
     use std::{
@@ -296,8 +299,10 @@ mod linux_impl {
         time::{Duration, Instant},
     };
 
+    #[cfg(has_wine_host)]
     const WINE_HOST_EXE: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/chronomix-wine-host.exe"));
+    #[cfg(has_wine_host)]
     const WINE_HOST_SO: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/chronomix-wine-host.exe.so"));
 
@@ -423,23 +428,33 @@ mod linux_impl {
 
     impl WineVst3Plugin {
         pub fn load(dll_path: &Path, sample_rate: f64, block_size: usize) -> Result<Self, WineError> {
-            let (host_so, host_dir) = materialize_wine_host_files()?;
+            Self::load_with_config(dll_path, sample_rate, block_size, &WineConfig::default())
+        }
+
+        pub fn load_with_config(
+            dll_path: &Path,
+            sample_rate: f64,
+            block_size: usize,
+            config: &WineConfig,
+        ) -> Result<Self, WineError> {
+            let (wine_bin, prefix) = ensure_prefix_ready_for_plugin(config)?;
+            let (host_so, host_dir) = materialize_wine_host_files(config)?;
 
             let unique = format!(
-                "chronomix-wine-{}-{}",
+                "c-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
+                    .map(|d| d.as_nanos() % 1_000_000_000)
                     .unwrap_or(0)
             );
-            let temp_dir = std::env::temp_dir().join(unique);
+            let temp_dir = short_ipc_dir().join(unique);
             fs::create_dir_all(&temp_dir)
                 .map_err(|e| WineError::Ipc(format!("create temp dir: {e}")))?;
 
-            let shm_path = temp_dir.join("audio.shm");
-            let ctrl_sock_path = temp_dir.join("ctrl.sock");
-            let audio_sock_path = temp_dir.join("audio.sock");
+            let shm_path = temp_dir.join("a.shm");
+            let ctrl_sock_path = temp_dir.join("c.sock");
+            let audio_sock_path = temp_dir.join("a.sock");
 
             let shm_len = std::mem::size_of::<ShmAudioBlock>();
             let shm_file = OpenOptions::new()
@@ -448,10 +463,14 @@ mod linux_impl {
                 .create(true)
                 .truncate(true)
                 .open(&shm_path)
-                .map_err(|e| WineError::Ipc(format!("create shm: {e}")))?;
-            shm_file
-                .set_len(shm_len as u64)
-                .map_err(|e| WineError::Ipc(format!("size shm: {e}")))?;
+                .map_err(|e| {
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    WineError::Ipc(format!("create shm: {e}"))
+                })?;
+            shm_file.set_len(shm_len as u64).map_err(|e| {
+                let _ = fs::remove_dir_all(&temp_dir);
+                WineError::Ipc(format!("size shm: {e}"))
+            })?;
 
             use std::os::fd::AsRawFd;
             let raw_ptr = unsafe {
@@ -477,10 +496,14 @@ mod linux_impl {
             }
             let shm = ShmMapping { ptr: shm_ptr };
 
-            let ctrl_listener = UnixListener::bind(&ctrl_sock_path)
-                .map_err(|e| WineError::Ipc(format!("bind ctrl socket: {e}")))?;
-            let audio_listener = UnixListener::bind(&audio_sock_path)
-                .map_err(|e| WineError::Ipc(format!("bind audio socket: {e}")))?;
+            let ctrl_listener = UnixListener::bind(&ctrl_sock_path).map_err(|e| {
+                let _ = fs::remove_dir_all(&temp_dir);
+                WineError::Ipc(format!("bind ctrl socket: {e}"))
+            })?;
+            let audio_listener = UnixListener::bind(&audio_sock_path).map_err(|e| {
+                let _ = fs::remove_dir_all(&temp_dir);
+                WineError::Ipc(format!("bind audio socket: {e}"))
+            })?;
             ctrl_listener.set_nonblocking(true).ok();
             audio_listener.set_nonblocking(true).ok();
 
@@ -491,7 +514,7 @@ mod linux_impl {
             let winedllpath = std::env::join_paths(winedllpath_entries)
                 .map_err(|e| WineError::Launch(format!("invalid WINEDLLPATH: {e}")))?;
 
-            let mut cmd = Command::new("wine");
+            let mut cmd = Command::new(&wine_bin);
             cmd.arg(&host_so)
                 .env("WINEDLLPATH", winedllpath)
                 .env("CHRONOMIX_DLL", dll_path)
@@ -503,14 +526,14 @@ mod linux_impl {
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped());
-
-            if std::env::var_os("CHRONOMIX_WINE_DEBUG").is_none() {
-                cmd.env("WINEDEBUG", "-all");
-            }
+            apply_wine_process_env(&mut cmd, &wine_bin, &prefix, config.auto_display, true);
 
             let mut child = cmd
                 .spawn()
-                .map_err(|e| WineError::Launch(e.to_string()))?;
+                .map_err(|e| {
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    WineError::Launch(e.to_string())
+                })?;
 
             let deadline = Instant::now() + Duration::from_secs(30);
             let ctrl_stream = accept_with_timeout(&ctrl_listener, &mut child, deadline)?;
@@ -758,25 +781,39 @@ mod linux_impl {
         }
     }
 
-    fn materialize_wine_host_files() -> Result<(PathBuf, PathBuf), WineError> {
-        let base_dir = std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-            .unwrap_or_else(std::env::temp_dir)
-            .join("chronomix")
-            .join("wine-host");
+    #[cfg_attr(has_wine_host, allow(unused_variables))]
+    fn materialize_wine_host_files(config: &WineConfig) -> Result<(PathBuf, PathBuf), WineError> {
+        if let Some(cached) = cached_runtime_bridge_paths() {
+            return Ok(cached);
+        }
 
-        fs::create_dir_all(&base_dir)
-            .map_err(|e| WineError::Ipc(format!("create cache dir: {e}")))?;
+        #[cfg(has_wine_host)]
+        {
+            let base_dir = std::env::var_os("XDG_CACHE_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(std::env::temp_dir)
+                .join("chronomix")
+                .join("wine-host");
 
-        let exe_path = base_dir.join("chronomix-wine-host.exe");
-        let so_path = base_dir.join("chronomix-wine-host.exe.so");
+            fs::create_dir_all(&base_dir)
+                .map_err(|e| WineError::Ipc(format!("create cache dir: {e}")))?;
 
-        write_if_changed(&exe_path, WINE_HOST_EXE)?;
-        write_if_changed(&so_path, WINE_HOST_SO)?;
-        Ok((so_path, base_dir))
+            let exe_path = base_dir.join("chronomix-wine-host.exe");
+            let so_path = base_dir.join("chronomix-wine-host.exe.so");
+
+            write_if_changed(&exe_path, WINE_HOST_EXE)?;
+            write_if_changed(&so_path, WINE_HOST_SO)?;
+            return Ok((so_path, base_dir));
+        }
+
+        #[cfg(not(has_wine_host))]
+        {
+            rebuild_wine_bridge(config)
+        }
     }
 
+    #[cfg(has_wine_host)]
     fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), WineError> {
         let same = fs::read(path).map(|existing| existing == bytes).unwrap_or(false);
         if !same {
@@ -791,7 +828,7 @@ mod linux_impl {
     }
 }
 
-#[cfg(not(all(target_os = "linux", has_wine_host)))]
+#[cfg(not(target_os = "linux"))]
 mod stub_impl {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -820,10 +857,16 @@ mod stub_impl {
     }
 
     impl WineVst3Plugin {
-        pub fn load(_dll_path: &Path, _sample_rate: f64, _block_size: usize) -> Result<Self, WineError> {
-            #[cfg(target_os = "linux")]
-            return Err(WineError::BridgeNotBuilt);
-            #[cfg(not(target_os = "linux"))]
+        pub fn load(dll_path: &Path, sample_rate: f64, block_size: usize) -> Result<Self, WineError> {
+            Self::load_with_config(dll_path, sample_rate, block_size, &WineConfig::default())
+        }
+
+        pub fn load_with_config(
+            _dll_path: &Path,
+            _sample_rate: f64,
+            _block_size: usize,
+            _config: &WineConfig,
+        ) -> Result<Self, WineError> {
             Err(WineError::UnsupportedOs)
         }
 
@@ -855,15 +898,19 @@ mod stub_impl {
     }
 }
 
-#[cfg(all(target_os = "linux", has_wine_host))]
+#[cfg(target_os = "linux")]
 pub use linux_impl::{WineAudioChannel, WineVst3Plugin};
 
-#[cfg(not(all(target_os = "linux", has_wine_host)))]
+#[cfg(not(target_os = "linux"))]
 pub use stub_impl::{WineAudioChannel, WineVst3Plugin};
 
-/// Whether the Wine bridge is compiled and available on this host.
+/// Whether the Wine bridge is compiled or compilable at runtime on this host.
 pub fn is_wine_bridge_available() -> bool {
-    cfg!(all(target_os = "linux", has_wine_host))
+    cfg!(target_os = "linux")
+        && !matches!(
+            current_bridge_mode(resolve_wine_binary(&WineConfig::default()).as_deref()),
+            WineBridgeMode::Unavailable
+        )
 }
 
 #[cfg(test)]

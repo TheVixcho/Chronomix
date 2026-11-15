@@ -1,4 +1,35 @@
-use std::{env, path::PathBuf, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+fn find_winegpp() -> Option<PathBuf> {
+    if let Ok(explicit) = env::var("CHRONOMIX_WINEGPP") {
+        let p = PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    for candidate in [
+        "wineg++",
+        "/usr/bin/wineg++",
+        "/usr/local/bin/wineg++",
+        "/opt/wine-staging/bin/wineg++",
+        "/opt/wine-devel/bin/wineg++",
+        "/opt/wine-stable/bin/wineg++",
+    ] {
+        let p = Path::new(candidate);
+        if p.is_absolute() {
+            if p.is_file() {
+                return Some(p.to_path_buf());
+            }
+        } else if Command::new(candidate).arg("--version").output().is_ok() {
+            return Some(PathBuf::from(candidate));
+        }
+    }
+    None
+}
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(has_wine_host)");
@@ -12,7 +43,14 @@ fn main() {
     let src = PathBuf::from("cpp/wine_host.cpp");
     let out_base = out_dir.join("chronomix-wine-host");
 
-    let status = Command::new("wineg++")
+    let Some(winegpp) = find_winegpp() else {
+        println!(
+            "cargo::warning=wineg++ not found at build time; Wine host can still be compiled at runtime if wineg++ is installed"
+        );
+        return;
+    };
+
+    let status = Command::new(&winegpp)
         .arg("-O2")
         .arg("-std=c++17")
         .arg(&src)
@@ -28,12 +66,12 @@ fn main() {
         }
         Ok(s) => {
             println!(
-                "cargo::warning=wineg++ exited with {s}; Windows VST3 bridge will be disabled"
+                "cargo::warning=wineg++ exited with {s}; prebuilt Windows VST bridge will be built at runtime if available"
             );
         }
         Err(e) => {
             println!(
-                "cargo::warning=wineg++ not found ({e}); Windows VST3 bridge will be disabled"
+                "cargo::warning=wineg++ failed ({e}); prebuilt Windows VST bridge will be built at runtime if available"
             );
         }
     }

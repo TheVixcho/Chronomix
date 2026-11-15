@@ -20,6 +20,13 @@ use pedal_audio::{
 use pedal_wine::{
     Vst3BinaryKind, WineAudioChannel, WineError, WineParamInfo, WineVst3Plugin,
 };
+pub use pedal_wine::{
+    WineAction, WineBridgeMode, WineConfig, WineEnvironmentStatus, WinePrefixInfo, WinePrefixKind,
+    WineRunnerInfo, default_chronomix_wine_prefix, detect_display_env, discover_wine_binaries,
+    discover_wine_prefixes, initialize_wine_prefix, inspect_wine_environment,
+    launch_wine_executable, launch_wine_tool, rebuild_wine_bridge, resolve_wine_binary,
+    resolve_wine_prefix, standard_prefix_vst_dirs,
+};
 use rtrb::{Consumer, Producer, RingBuffer};
 use thiserror::Error;
 use vst2::NativeVst2Plugin;
@@ -478,6 +485,7 @@ pub struct PedalEngine {
     recording: Option<RecordingHandle>,
     sample_rate: u32,
     block_size: usize,
+    wine_config: WineConfig,
 }
 
 impl Default for PedalEngine {
@@ -498,7 +506,18 @@ impl PedalEngine {
             recording: None,
             sample_rate: 48_000,
             block_size: 256,
+            wine_config: WineConfig::default(),
         }
+    }
+
+    /// Updates the Wine runner/prefix configuration used when loading Windows VST2/VST3 plugins.
+    pub fn set_wine_config(&mut self, config: WineConfig) {
+        self.wine_config = config;
+    }
+
+    /// Returns the active Wine runner/prefix configuration.
+    pub fn wine_config(&self) -> &WineConfig {
+        &self.wine_config
     }
 
     pub fn list_input_devices(&self) -> Result<Vec<AudioDeviceInfo>, EngineError> {
@@ -656,7 +675,7 @@ impl PedalEngine {
 
         #[cfg(target_os = "linux")]
         {
-            for wine_info in discover_wine_vst3_plugins() {
+            for wine_info in discover_wine_vst3_plugins(&self.wine_config) {
                 if !plugins.iter().any(|p| p.path == wine_info.path) {
                     plugins.push(wine_info);
                 }
@@ -813,7 +832,7 @@ impl PedalEngine {
         let sr = self.sample_rate() as f64;
         let block = self.block_size;
 
-        let wine_plugin = WineVst3Plugin::load(dll_path, sr, block)?;
+        let wine_plugin = WineVst3Plugin::load_with_config(dll_path, sr, block, &self.wine_config)?;
         let wmeta = wine_plugin.metadata();
         let fallback_name = requested_path
             .file_stem()
@@ -1210,31 +1229,29 @@ fn discover_vst_targets_in_dir(dir: &Path) -> Vec<PluginInfo> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_wine_vst3_plugins() -> Vec<PluginInfo> {
+fn discover_wine_vst3_plugins(config: &WineConfig) -> Vec<PluginInfo> {
     let mut prefixes = Vec::new();
-    if let Ok(prefix) = std::env::var("WINEPREFIX") {
-        if !prefix.is_empty() {
-            prefixes.push(PathBuf::from(prefix));
+    let mut push_prefix = |p: PathBuf| {
+        if !prefixes.contains(&p) {
+            prefixes.push(p);
         }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let default_prefix = PathBuf::from(home).join(".wine");
-        if !prefixes.contains(&default_prefix) {
-            prefixes.push(default_prefix);
-        }
-    }
+    };
 
-    let subdirs = [
-        "drive_c/Program Files/Common Files/VST3",
-        "drive_c/Program Files/VSTPlugins",
-        "drive_c/Program Files/Steinberg/VstPlugins",
-        "drive_c/Program Files/Common Files/VST2",
-    ];
+    if let Some(custom) = &config.wine_prefix {
+        push_prefix(custom.clone());
+    }
+    if let Some(resolved) = resolve_wine_prefix(config) {
+        push_prefix(resolved);
+    }
+    for info in discover_wine_prefixes() {
+        if info.initialized {
+            push_prefix(info.path);
+        }
+    }
 
     let mut found = Vec::new();
     for prefix in prefixes {
-        for sub in subdirs {
-            let root = prefix.join(sub);
+        for root in standard_prefix_vst_dirs(&prefix) {
             if root.is_dir() {
                 for info in discover_vst_targets_in_dir(&root) {
                     if !found.iter().any(|p: &PluginInfo| p.path == info.path) {

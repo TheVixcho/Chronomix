@@ -999,6 +999,18 @@ static DWORD WINAPI audio_thread_entry(LPVOID raw) {
     return 0;
 }
 
+static std::wstring utf8_to_wide(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    if (len <= 0) {
+        return std::wstring(utf8.begin(), utf8.end());
+    }
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, out.data(), len);
+    if (!out.empty() && out.back() == L'\0') out.pop_back();
+    return out;
+}
+
 static std::wstring unix_to_win_wide(const std::string& path) {
     std::string dos = path;
     if (!dos.empty() && dos[0] == '/') {
@@ -1007,12 +1019,29 @@ static std::wstring unix_to_win_wide(const std::string& path) {
     for (char& c : dos) {
         if (c == '/') c = '\\';
     }
-    int len = MultiByteToWideChar(CP_UTF8, 0, dos.c_str(), -1, nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring out(static_cast<size_t>(len), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, dos.c_str(), -1, out.data(), len);
-    if (!out.empty() && out.back() == L'\0') out.pop_back();
-    return out;
+    return utf8_to_wide(dos);
+}
+
+static std::wstring unix_to_prefix_c_wide(const std::string& path) {
+    const char* prefix_env = std::getenv("CHRONOMIX_PREFIX");
+    if (!prefix_env || !*prefix_env) {
+        prefix_env = std::getenv("WINEPREFIX");
+    }
+    if (!prefix_env || !*prefix_env) return {};
+
+    std::string prefix(prefix_env);
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.pop_back();
+    }
+    std::string drive_c = prefix + "/drive_c/";
+    if (path.rfind(drive_c, 0) == 0) {
+        std::string rel = path.substr(drive_c.size());
+        for (char& c : rel) {
+            if (c == '/') c = '\\';
+        }
+        return utf8_to_wide("C:\\" + rel);
+    }
+    return {};
 }
 
 static std::string build_params_json(vst3::IEditController* ctrl) {
@@ -1155,14 +1184,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         return 5;
     }
 
-    std::wstring dll_w = unix_to_win_wide(dll_env);
-    auto slash_pos = dll_w.find_last_of(L'\\');
-    if (slash_pos != std::wstring::npos) {
-        std::wstring dir = dll_w.substr(0, slash_pos);
-        SetDllDirectoryW(dir.c_str());
-    }
+    auto try_load_module = [](const std::wstring& win_path) -> HMODULE {
+        if (win_path.empty()) return nullptr;
+        auto slash_pos = win_path.find_last_of(L'\\');
+        if (slash_pos != std::wstring::npos) {
+            std::wstring dir = win_path.substr(0, slash_pos);
+            SetDllDirectoryW(dir.c_str());
+        }
+        return LoadLibraryW(win_path.c_str());
+    };
 
-    HMODULE mod = LoadLibraryW(dll_w.c_str());
+    std::wstring c_dll_w = unix_to_prefix_c_wide(dll_env);
+    std::wstring z_dll_w = unix_to_win_wide(dll_env);
+    HMODULE mod = nullptr;
+    if (!c_dll_w.empty()) {
+        mod = try_load_module(c_dll_w);
+    }
+    if (!mod) {
+        mod = try_load_module(z_dll_w);
+    }
     if (!mod) {
         DWORD err = GetLastError();
         send_err("LoadLibraryW failed with Win32 error " + std::to_string(err));
@@ -1529,7 +1569,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                             RECT wr{0, 0, w, h};
                             AdjustWindowRectEx(&wr, style, FALSE, 0);
                             std::wstring title = L"Chronomix [Wine VST2] - " +
-                                std::wstring(plugin_name.begin(), plugin_name.end());
+                                utf8_to_wide(plugin_name);
                             g_hwnd = CreateWindowExW(
                                 0, wc.lpszClassName, title.c_str(), style,
                                 CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
@@ -1586,7 +1626,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                                 RECT wr{0, 0, w, h};
                                 AdjustWindowRectEx(&wr, style, FALSE, 0);
                                 std::wstring title = L"Chronomix [Wine] - " +
-                                    std::wstring(plugin_name.begin(), plugin_name.end());
+                                    utf8_to_wide(plugin_name);
                                 g_hwnd = CreateWindowExW(
                                     0, wc.lpszClassName, title.c_str(), style,
                                     CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
