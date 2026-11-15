@@ -2693,7 +2693,7 @@ fn render_channel_bank_selector(
 
                 for (section, label, count, accent) in sections {
                     let is_active = ctx.state.active_bank == section;
-                    let (btn_rect, btn_resp) = ui.allocate_exact_size(
+                    let (btn_rect_alloc, btn_resp) = ui.allocate_exact_size(
                         Vec2::new(width - 8.0, 36.0),
                         Sense::click(),
                     );
@@ -2710,27 +2710,72 @@ fn render_channel_bank_selector(
                         }
                     }
 
+                    if btn_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    let painter = ui.painter();
+                    let socket_rect = btn_rect_alloc.expand(0.8);
+                    painter.rect_filled(socket_rect, CornerRadius::same(3), Color32::from_rgb(7, 7, 9));
+                    painter.rect_stroke(
+                        socket_rect,
+                        CornerRadius::same(3),
+                        Stroke::new(1.0_f32, Color32::from_rgb(18, 19, 24)),
+                        StrokeKind::Inside,
+                    );
+
+                    let pressed_offset = if btn_resp.is_pointer_button_down_on() { 0.7 } else { 0.0 };
+                    let btn_rect = btn_rect_alloc.translate(Vec2::new(0.0, pressed_offset));
+
                     let bg_col = if is_active {
-                        Color32::from_rgb(32, 36, 46)
+                        Color32::from_rgb(32, 34, 42)
                     } else if btn_resp.hovered() {
-                        Color32::from_rgb(26, 30, 40)
+                        Color32::from_rgb(26, 28, 36)
                     } else {
-                        Color32::from_rgb(20, 23, 30)
+                        Color32::from_rgb(20, 21, 26)
                     };
 
                     let border_col = if is_active {
                         accent
                     } else if btn_resp.hovered() {
-                        Color32::from_rgb(70, 80, 100)
+                        Color32::from_rgb(70, 75, 90)
                     } else {
-                        Color32::from_rgb(42, 48, 62)
+                        Color32::from_rgb(38, 40, 50)
                     };
 
-                    let painter = ui.painter();
-                    painter.rect(
+                    painter.rect_filled(btn_rect, CornerRadius::same(3), bg_col);
+
+                    if is_active {
+                        let core_rect = Rect::from_center_size(
+                            btn_rect.center(),
+                            Vec2::new(btn_rect.width() * 0.72, btn_rect.height() * 0.58),
+                        );
+                        painter.rect_filled(
+                            core_rect,
+                            CornerRadius::same(2),
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 30),
+                        );
+                    }
+
+                    let rim_alpha = if is_active { 120 } else { 32 };
+                    painter.line_segment(
+                        [
+                            Pos2::new(btn_rect.left() + 2.0, btn_rect.top() + 1.0),
+                            Pos2::new(btn_rect.right() - 2.0, btn_rect.top() + 1.0),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, rim_alpha)),
+                    );
+                    painter.line_segment(
+                        [
+                            Pos2::new(btn_rect.left() + 2.0, btn_rect.bottom() - 1.0),
+                            Pos2::new(btn_rect.right() - 2.0, btn_rect.bottom() - 1.0),
+                        ],
+                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 85)),
+                    );
+
+                    painter.rect_stroke(
                         btn_rect,
                         CornerRadius::same(3),
-                        bg_col,
                         Stroke::new(if is_active { 1.5_f32 } else { 1.0_f32 }, border_col),
                         StrokeKind::Inside,
                     );
@@ -2742,7 +2787,7 @@ fn render_channel_bank_selector(
                     let led_col = if is_active {
                         accent
                     } else {
-                        Color32::from_rgb(32, 36, 46)
+                        Color32::from_rgb(28, 30, 38)
                     };
                     painter.rect_filled(led_rect, CornerRadius::same(1), led_col);
 
@@ -2751,7 +2796,7 @@ fn render_channel_bank_selector(
                     } else if btn_resp.hovered() {
                         Color32::from_rgb(220, 226, 238)
                     } else {
-                        Color32::from_rgb(150, 160, 175)
+                        Color32::from_rgb(150, 155, 168)
                     };
 
                     painter.text(
@@ -2764,9 +2809,9 @@ fn render_channel_bank_selector(
 
                     let badge_text = format!("{count}");
                     let badge_col = if count > 0 {
-                        if is_active { accent } else { Color32::from_rgb(180, 190, 205) }
+                        if is_active { accent } else { Color32::from_rgb(180, 186, 198) }
                     } else {
-                        Color32::from_rgb(85, 95, 110)
+                        Color32::from_rgb(85, 90, 102)
                     };
                     painter.text(
                         Pos2::new(btn_rect.center().x, btn_rect.top() + 26.0),
@@ -3862,6 +3907,56 @@ fn show_channel_context_menu(
     }
 }
 
+fn paint_glass_scribble_cover(p: &egui::Painter, rect: Rect) {
+    let top_rim = [
+        Pos2::new(rect.left() + 1.5, rect.top() + 0.8),
+        Pos2::new(rect.right() - 1.5, rect.top() + 0.8),
+    ];
+    p.line_segment(
+        top_rim,
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45)),
+    );
+
+    let left_rim = [
+        Pos2::new(rect.left() + 0.8, rect.top() + 1.5),
+        Pos2::new(rect.left() + 0.8, rect.bottom() - 1.5),
+    ];
+    p.line_segment(
+        left_rim,
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 18)),
+    );
+
+    let cut_y_l = (rect.top() + rect.height() * 0.52).min(rect.bottom() - 2.0);
+    let cut_y_r = (rect.top() + rect.height() * 0.24).min(rect.bottom() - 2.0);
+
+    let pts = vec![
+        Pos2::new(rect.left() + 1.0, rect.top() + 1.0),
+        Pos2::new(rect.right() - 1.0, rect.top() + 1.0),
+        Pos2::new(rect.right() - 1.0, cut_y_r),
+        Pos2::new(rect.left() + 1.0, cut_y_l),
+    ];
+    p.add(Shape::convex_polygon(
+        pts,
+        Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+        Stroke::NONE,
+    ));
+
+    p.line_segment(
+        [
+            Pos2::new(rect.left() + 1.0, cut_y_l),
+            Pos2::new(rect.right() - 1.0, cut_y_r),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 26)),
+    );
+
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(2),
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+        StrokeKind::Inside,
+    );
+}
+
 fn draw_console_switch(
     ui: &mut egui::Ui,
     label: &str,
@@ -3882,32 +3977,79 @@ fn draw_console_switch(
 
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
-        let off_fill = Color32::from_rgb(30, 34, 44);
-        let on_fill = lerp_color(active_color, Color32::WHITE, 0.16);
-        let bg = lerp_color(
-            lerp_color(off_fill, Color32::from_rgb(44, 50, 64), hov_t),
-            on_fill,
-            act_t,
-        );
-        let stroke_col = lerp_color(
-            Color32::from_rgb(54, 60, 74),
-            lerp_color(active_color, Color32::WHITE, 0.45),
-            act_t.max(hov_t * 0.5),
-        );
-        p.rect_filled(rect, CornerRadius::same(2), bg);
+        let pressed_offset = if resp.is_pointer_button_down_on() { 0.7 } else { 0.0 };
+        let socket_rect = rect.expand(0.8);
+        p.rect_filled(socket_rect, CornerRadius::same(3), Color32::from_rgb(7, 7, 9));
         p.rect_stroke(
-            rect,
-            CornerRadius::same(2),
-            Stroke::new(1.0_f32, stroke_col),
+            socket_rect,
+            CornerRadius::same(3),
+            Stroke::new(1.0_f32, Color32::from_rgb(18, 19, 24)),
             StrokeKind::Inside,
         );
+
+        let btn_rect = rect.translate(Vec2::new(0.0, pressed_offset));
+        let off_body = Color32::from_rgb(26, 27, 33);
+        let hov_body = Color32::from_rgb(38, 40, 48);
+        let on_body = lerp_color(active_color, Color32::WHITE, 0.14);
+        let base_body = lerp_color(lerp_color(off_body, hov_body, hov_t), on_body, act_t);
+        p.rect_filled(btn_rect, CornerRadius::same(3), base_body);
+
+        if act_t > 0.02 {
+            let core_w = (btn_rect.width() * 0.66).max(8.0);
+            let core_h = (btn_rect.height() * 0.58).max(6.0);
+            let core_rect = Rect::from_center_size(btn_rect.center(), Vec2::new(core_w, core_h));
+            let alpha = (120.0 * act_t).clamp(0.0, 150.0) as u8;
+            let glow_col = if active_color == StudioPalette::ACCENT_CRIMSON {
+                Color32::from_rgba_unmultiplied(255, 120, 120, alpha)
+            } else if active_color == StudioPalette::ACCENT_AMBER {
+                Color32::from_rgba_unmultiplied(255, 235, 160, alpha)
+            } else if active_color == StudioPalette::ACCENT_CYAN || active_color == StudioPalette::ACCENT_EMERALD {
+                Color32::from_rgba_unmultiplied(215, 245, 255, alpha)
+            } else {
+                Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
+            };
+            p.rect_filled(core_rect, CornerRadius::same(2), glow_col);
+        }
+
+        let rim_alpha = if active { 135 } else { 38 };
+        p.line_segment(
+            [
+                Pos2::new(btn_rect.left() + 2.0, btn_rect.top() + 1.0),
+                Pos2::new(btn_rect.right() - 2.0, btn_rect.top() + 1.0),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, rim_alpha)),
+        );
+        p.line_segment(
+            [
+                Pos2::new(btn_rect.left() + 2.0, btn_rect.bottom() - 1.0),
+                Pos2::new(btn_rect.right() - 2.0, btn_rect.bottom() - 1.0),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 85)),
+        );
+
+        let border_col = lerp_color(
+            Color32::from_rgb(42, 45, 54),
+            lerp_color(active_color, Color32::WHITE, 0.45),
+            act_t.max(hov_t * 0.4),
+        );
+        p.rect_stroke(
+            btn_rect,
+            CornerRadius::same(3),
+            Stroke::new(1.0_f32, border_col),
+            StrokeKind::Inside,
+        );
+
         let txt_col = if active {
-            Color32::from_rgb(12, 14, 20)
+            if active_color == StudioPalette::ACCENT_CRIMSON {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(12, 14, 20)
+            }
         } else {
-            StudioPalette::TEXT_PRIMARY
+            lerp_color(StudioPalette::TEXT_PRIMARY, Color32::WHITE, hov_t)
         };
         p.text(
-            rect.center(),
+            btn_rect.center(),
             Align2::CENTER_CENTER,
             label,
             FontId::monospace(9.0),
@@ -4095,6 +4237,26 @@ fn draw_wing_vertical_meter(
             p.rect_filled(seg_rect, CornerRadius::same(1), col);
         }
     }
+
+    p.line_segment(
+        [
+            Pos2::new(rect.left() + 1.2, rect.top() + 1.0),
+            Pos2::new(rect.right() - 1.2, rect.top() + 1.0),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 35)),
+    );
+    let cut_y = rect.top() + (rect.height() * 0.35).min(50.0);
+    let pts = vec![
+        Pos2::new(rect.left() + 1.0, rect.top() + 1.0),
+        Pos2::new(rect.right() - 1.0, rect.top() + 1.0),
+        Pos2::new(rect.right() - 1.0, cut_y - 12.0),
+        Pos2::new(rect.left() + 1.0, cut_y),
+    ];
+    p.add(Shape::convex_polygon(
+        pts,
+        Color32::from_rgba_unmultiplied(255, 255, 255, 12),
+        Stroke::NONE,
+    ));
 }
 
 fn draw_wing_eq_curve(ui: &mut egui::Ui, dsp: &ChannelDspConfig, sr: f32, height: f32) {
