@@ -31,8 +31,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Chronomix - Studio Audio DAW & VST2/VST3 Host")
-            .with_inner_size([1080.0, 760.0])
-            .with_min_inner_size([860.0, 600.0]),
+            .with_inner_size([1020.0, 740.0])
+            .with_min_inner_size([360.0, 260.0]),
         ..Default::default()
     };
 
@@ -517,61 +517,71 @@ impl ChronomixApp {
             .max(self.peak_hold.out_right * peak_decay);
     }
 
-    /// Animated top navigation bar with vector logo, glowing tabs, live audio pulse, and language pill.
+    /// Static, squared top navigation bar with vector logo, tabs, live status badge, and language selector.
     fn render_main_toolbar(&mut self, ui: &mut egui::Ui) {
         let t = self.lang.text();
-        let time = ui.input(|i| i.time);
 
-        ui.horizontal(|ui| {
-            // Animated Studio Logo Mark
-            let (logo_rect, _) = ui.allocate_exact_size(Vec2::new(32.0, 32.0), Sense::hover());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
+
+            // Static Squared Studio Logo Mark (no animation)
+            let (logo_rect, _) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::hover());
             if ui.is_rect_visible(logo_rect) {
                 let painter = ui.painter();
                 painter.rect_filled(
                     logo_rect,
-                    CornerRadius::same(8),
+                    CornerRadius::same(2),
                     Color32::from_rgb(20, 32, 54),
                 );
                 painter.rect_stroke(
                     logo_rect,
-                    CornerRadius::same(8),
-                    Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN),
+                    CornerRadius::same(2),
+                    Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN),
                     StrokeKind::Inside,
                 );
-                for bar in 0..4 {
-                    let phase = if self.engine.is_audio_running() {
-                        ((time * 4.5 + bar as f64 * 0.9).sin() * 0.5 + 0.5) as f32
-                    } else {
-                        [0.45, 0.85, 0.65, 0.35][bar]
-                    };
-                    let h = 6.0 + phase * 14.0;
-                    let x = logo_rect.left() + 6.5 + bar as f32 * 5.5;
+                let static_bars: [f32; 4] = [0.45, 0.85, 0.65, 0.38];
+                for (bar, frac) in static_bars.iter().enumerate() {
+                    let h = 5.0 + frac * 13.0;
+                    let x = logo_rect.left() + 5.5 + bar as f32 * 5.0;
                     let bar_rect = Rect::from_center_size(
                         Pos2::new(x, logo_rect.center().y),
-                        Vec2::new(3.2, h),
+                        Vec2::new(3.0, h),
                     );
-                    painter.rect_filled(bar_rect, CornerRadius::same(2), StudioPalette::ACCENT_CYAN);
+                    painter.rect_filled(
+                        bar_rect,
+                        CornerRadius::same(1),
+                        StudioPalette::ACCENT_CYAN,
+                    );
                 }
             }
 
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
+            if ui.available_width() >= 560.0 {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(
+                        RichText::new("CHRONOMIX")
+                            .size(15.5)
+                            .strong()
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new("STUDIO DAW  |  VST2 / VST3")
+                            .size(9.5)
+                            .color(StudioPalette::ACCENT_CYAN),
+                    );
+                });
+            } else {
                 ui.label(
                     RichText::new("CHRONOMIX")
-                        .size(16.0)
+                        .size(15.0)
                         .strong()
                         .color(Color32::WHITE),
                 );
-                ui.label(
-                    RichText::new("STUDIO DAW  |  VST2 / VST3")
-                        .size(9.5)
-                        .color(StudioPalette::ACCENT_CYAN),
-                );
-            });
+            }
 
-            ui.add_space(14.0);
+            ui.separator();
 
-            // Animated Tab Pills with Vector Icons
+            // Squared Tab Buttons with Vector Icons
             for (panel, icon, label, id_salt) in [
                 (
                     ActivePanel::News,
@@ -596,11 +606,11 @@ impl ChronomixApp {
                 let id = ui.make_persistent_id(id_salt);
                 let galley = ui.painter().layout_no_wrap(
                     label.to_string(),
-                    FontId::proportional(14.0),
+                    FontId::proportional(13.0),
                     Color32::WHITE,
                 );
                 let text_w = galley.size().x;
-                let desired = Vec2::new(text_w + 46.0, 34.0);
+                let desired = Vec2::new(text_w + 38.0, 30.0);
                 let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
                 if resp.clicked() {
                     self.active_panel = panel;
@@ -621,32 +631,30 @@ impl ChronomixApp {
                         Color32::from_rgb(27, 56, 98),
                         sel_t,
                     );
-                    painter.rect_filled(rect, CornerRadius::same(9), bg);
+                    painter.rect_filled(rect, CornerRadius::same(2), bg);
 
-                    if sel_t > 0.01 || hov_t > 0.01 {
-                        let border_col = lerp_color(
-                            StudioPalette::BORDER_SUBTLE,
-                            StudioPalette::ACCENT_CYAN,
-                            sel_t.max(hov_t * 0.5),
-                        );
-                        painter.rect_stroke(
-                            rect,
-                            CornerRadius::same(9),
-                            Stroke::new(1.0_f32 + sel_t * 0.4, border_col),
-                            StrokeKind::Inside,
-                        );
-                    }
+                    let border_col = lerp_color(
+                        StudioPalette::BORDER_SUBTLE,
+                        StudioPalette::ACCENT_CYAN,
+                        sel_t.max(hov_t * 0.5),
+                    );
+                    painter.rect_stroke(
+                        rect,
+                        CornerRadius::same(2),
+                        Stroke::new(1.0_f32, border_col),
+                        StrokeKind::Inside,
+                    );
 
-                    // Bottom glowing indicator bar
+                    // Bottom active indicator bar
                     if sel_t > 0.02 {
-                        let bar_w = (rect.width() - 20.0) * sel_t;
+                        let bar_w = (rect.width() - 8.0) * sel_t;
                         let bar_rect = Rect::from_center_size(
-                            Pos2::new(rect.center().x, rect.bottom() - 2.5),
-                            Vec2::new(bar_w.max(4.0), 2.5),
+                            Pos2::new(rect.center().x, rect.bottom() - 1.5),
+                            Vec2::new(bar_w.max(4.0), 2.0),
                         );
                         painter.rect_filled(
                             bar_rect,
-                            CornerRadius::same(2),
+                            CornerRadius::same(1),
                             StudioPalette::ACCENT_CYAN,
                         );
                     }
@@ -661,142 +669,135 @@ impl ChronomixApp {
                         StudioPalette::ACCENT_CYAN,
                         sel_t.max(hov_t * 0.7),
                     );
-                    let total_w = 14.0 + 7.0 + text_w;
+                    let total_w = 13.0 + 6.0 + text_w;
                     let start_x = rect.center().x - total_w * 0.5;
                     draw_vector_icon(
                         painter,
-                        Pos2::new(start_x + 7.0, rect.center().y),
-                        13.0,
+                        Pos2::new(start_x + 6.5, rect.center().y),
+                        12.5,
                         icon,
                         icon_col,
                     );
                     painter.text(
-                        Pos2::new(start_x + 21.0, rect.center().y),
+                        Pos2::new(start_x + 19.0, rect.center().y),
                         Align2::LEFT_CENTER,
                         label,
-                        FontId::proportional(14.0),
+                        FontId::proportional(13.0),
                         fg_col,
                     );
                 }
             }
 
-            // Right-side status badges & language segmented control
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.separator();
+
+            // Status badges & language segmented control (wrapped inline so it never overlaps tabs on narrow Hyprland splits)
+            if self.engine.shared.is_recording() {
                 egui::Frame::new()
-                    .fill(StudioPalette::BG_INPUT)
-                    .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::symmetric(4, 3))
+                    .fill(Color32::from_rgba_unmultiplied(239, 68, 68, 35))
+                    .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_CRIMSON))
+                    .corner_radius(CornerRadius::same(2))
+                    .inner_margin(Margin::symmetric(8, 3))
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.x = 3.0;
-                        for lang in [Lang::En, Lang::Es] {
-                            let selected = self.lang == lang;
-                            let btn = egui::Button::new(
-                                RichText::new(lang.code())
+                        ui.horizontal(|ui| {
+                            let (dot_rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(7.0), Sense::hover());
+                            ui.painter().rect_filled(
+                                dot_rect,
+                                CornerRadius::same(1),
+                                StudioPalette::ACCENT_CRIMSON,
+                            );
+                            ui.label(
+                                RichText::new(t.nav_rec_badge)
                                     .small()
                                     .strong()
-                                    .color(if selected {
-                                        Color32::WHITE
-                                    } else {
-                                        StudioPalette::TEXT_SECONDARY
-                                    }),
-                            )
-                            .fill(if selected {
-                                StudioPalette::ACCENT_BLUE
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .corner_radius(CornerRadius::same(6));
-                            if ui.add(btn).on_hover_text(lang.display_name()).clicked() {
-                                self.lang = lang;
-                                self.save_settings();
-                            }
-                        }
+                                    .color(Color32::WHITE),
+                            );
+                        });
                     });
-
-                ui.label(
-                    RichText::new(t.lang_label)
-                        .small()
-                        .color(StudioPalette::TEXT_MUTED),
-                );
-
-                // Animated live / recording status pill with vector LED dot
-                if self.engine.shared.is_recording() {
-                    let pulse = ((time * 5.0).sin() * 0.5 + 0.5) as f32;
-                    let col = lerp_color(
-                        Color32::from_rgb(160, 28, 28),
-                        StudioPalette::ACCENT_CRIMSON,
-                        pulse,
-                    );
-                    egui::Frame::new()
-                        .fill(Color32::from_rgba_unmultiplied(239, 68, 68, 35))
-                        .stroke(Stroke::new(1.2_f32, col))
-                        .corner_radius(CornerRadius::same(14))
-                        .inner_margin(Margin::symmetric(10, 4))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (dot_rect, _) =
-                                    ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                                ui.painter().circle_filled(dot_rect.center(), 4.0, col);
-                                ui.label(
-                                    RichText::new(t.nav_rec_badge)
-                                        .small()
-                                        .strong()
-                                        .color(Color32::WHITE),
-                                );
-                            });
+            } else if self.engine.is_audio_running() {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(16, 185, 129, 30))
+                    .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_EMERALD))
+                    .corner_radius(CornerRadius::same(2))
+                    .inner_margin(Margin::symmetric(8, 3))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (dot_rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(7.0), Sense::hover());
+                            ui.painter().rect_filled(
+                                dot_rect,
+                                CornerRadius::same(1),
+                                StudioPalette::ACCENT_EMERALD,
+                            );
+                            ui.label(
+                                RichText::new(t.nav_live_badge)
+                                    .small()
+                                    .strong()
+                                    .color(StudioPalette::ACCENT_EMERALD),
+                            );
                         });
-                } else if self.engine.is_audio_running() {
-                    let pulse = ((time * 3.2).sin() * 0.5 + 0.5) as f32;
-                    let col = lerp_color(
-                        Color32::from_rgb(12, 130, 90),
-                        StudioPalette::ACCENT_EMERALD,
-                        pulse,
-                    );
-                    egui::Frame::new()
-                        .fill(Color32::from_rgba_unmultiplied(16, 185, 129, 30))
-                        .stroke(Stroke::new(1.2_f32, col))
-                        .corner_radius(CornerRadius::same(14))
-                        .inner_margin(Margin::symmetric(10, 4))
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let (dot_rect, _) =
-                                    ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                                ui.painter().circle_filled(dot_rect.center(), 4.0, col);
-                                ui.label(
-                                    RichText::new(t.nav_live_badge)
-                                        .small()
-                                        .strong()
-                                        .color(StudioPalette::ACCENT_EMERALD),
-                                );
-                            });
-                        });
-                }
-            });
+                    });
+            }
+
+            egui::Frame::new()
+                .fill(StudioPalette::BG_INPUT)
+                .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
+                .corner_radius(CornerRadius::same(2))
+                .inner_margin(Margin::symmetric(3, 2))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    for lang in [Lang::En, Lang::Es] {
+                        let selected = self.lang == lang;
+                        let btn = egui::Button::new(
+                            RichText::new(lang.code())
+                                .small()
+                                .strong()
+                                .color(if selected {
+                                    Color32::WHITE
+                                } else {
+                                    StudioPalette::TEXT_SECONDARY
+                                }),
+                        )
+                        .fill(if selected {
+                            StudioPalette::ACCENT_BLUE
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .corner_radius(CornerRadius::same(2));
+                        if ui
+                            .add(btn)
+                            .on_hover_text(format!("{}: {}", t.lang_label, lang.display_name()))
+                            .clicked()
+                        {
+                            self.lang = lang;
+                            self.save_settings();
+                        }
+                    }
+                });
         });
     }
 
-    /// Startup / What's New (`Novedades`) panel with animated hero visualizer and 3-step quick workflow.
+    /// Startup / What's New (`Novedades`) panel with static squared hero card and responsive 3-step quick workflow.
     fn render_news_panel(&mut self, ui: &mut egui::Ui) {
         let t = self.lang.text();
-        let time = ui.input(|i| i.time);
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(4.0);
 
-            // Hero Studio Card with animated wave visualizer
-            studio_card(
-                ui,
-                Some(StudioPalette::ACCENT_CYAN),
-                Margin::same(20),
-                |ui| {
-                    ui.columns(2, |cols| {
-                        cols[0].vertical(|ui| {
+                // Clean, static squared Hero Studio Card (adapts to any window width)
+                studio_card(
+                    ui,
+                    Some(StudioPalette::ACCENT_CYAN),
+                    Margin::same(16),
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
                             egui::Frame::new()
                                 .fill(Color32::from_rgba_unmultiplied(14, 165, 233, 35))
                                 .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN))
-                                .corner_radius(CornerRadius::same(14))
-                                .inner_margin(Margin::symmetric(10, 3))
+                                .corner_radius(CornerRadius::same(2))
+                                .inner_margin(Margin::symmetric(8, 2))
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new("VST2  |  VST3  |  WINE X64  |  LOW-LATENCY")
@@ -806,156 +807,106 @@ impl ChronomixApp {
                                     );
                                 });
 
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new("Chronomix Studio")
-                                    .size(28.0)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            );
-                            ui.label(
-                                RichText::new(t.news_hero_subtitle)
-                                    .size(15.5)
-                                    .color(StudioPalette::ACCENT_CYAN),
-                            );
-                            ui.add_space(8.0);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(t.news_hero_description)
+                            egui::Frame::new()
+                                .fill(StudioPalette::BG_INPUT)
+                                .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
+                                .corner_radius(CornerRadius::same(2))
+                                .inner_margin(Margin::symmetric(8, 2))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} VSTs  |  {} Hz",
+                                            self.discovered_plugins.len(),
+                                            self.sample_rate
+                                        ))
+                                        .small()
+                                        .monospace()
                                         .color(StudioPalette::TEXT_SECONDARY),
-                                )
-                                .wrap(),
-                            );
-                            ui.add_space(16.0);
-
-                            ui.horizontal_wrapped(|ui| {
-                                if animated_action_button(
-                                    ui,
-                                    "hero_go_rec",
-                                    Some(StudioIcon::Mic),
-                                    t.news_go_recording,
-                                    StudioPalette::ACCENT_EMERALD,
-                                    true,
-                                    Vec2::new(175.0, 38.0),
-                                )
-                                .clicked()
-                                {
-                                    self.active_panel = ActivePanel::Recording;
-                                }
-
-                                if animated_action_button(
-                                    ui,
-                                    "hero_open_vst_dir",
-                                    Some(StudioIcon::Folder),
-                                    t.settings_open_vst_folder,
-                                    StudioPalette::ACCENT_BLUE,
-                                    false,
-                                    Vec2::new(185.0, 38.0),
-                                )
-                                .clicked()
-                                {
-                                    self.open_active_vst_folder();
-                                }
-
-                                if animated_action_button(
-                                    ui,
-                                    "hero_go_settings",
-                                    Some(StudioIcon::Gear),
-                                    t.nav_settings,
-                                    StudioPalette::BG_ELEVATED,
-                                    false,
-                                    Vec2::new(135.0, 38.0),
-                                )
-                                .clicked()
-                                {
-                                    self.active_panel = ActivePanel::Settings;
-                                }
-                            });
+                                    );
+                                });
                         });
 
-                        // Right column: Animated live synthesizer / oscilloscope artwork
-                        cols[1].vertical_centered(|ui| {
-                            let avail = Vec2::new(ui.available_width().max(200.0), 165.0);
-                            let (rect, _) = ui.allocate_exact_size(avail, Sense::hover());
-                            if ui.is_rect_visible(rect) {
-                                let painter = ui.painter();
-                                painter.rect_filled(
-                                    rect,
-                                    CornerRadius::same(12),
-                                    StudioPalette::BG_INPUT,
-                                );
-                                painter.rect_stroke(
-                                    rect,
-                                    CornerRadius::same(12),
-                                    Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE),
-                                    StrokeKind::Inside,
-                                );
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Chronomix Studio")
+                                .size(22.0)
+                                .strong()
+                                .color(Color32::WHITE),
+                        );
+                        ui.label(
+                            RichText::new(t.news_hero_subtitle)
+                                .size(14.0)
+                                .color(StudioPalette::ACCENT_CYAN),
+                        );
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(t.news_hero_description)
+                                    .color(StudioPalette::TEXT_SECONDARY),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(12.0);
 
-                                // Subtle grid lines
-                                for g in 1..4 {
-                                    let y = rect.top() + (rect.height() * g as f32 / 4.0);
-                                    painter.line_segment(
-                                        [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-                                        Stroke::new(1.0_f32, Color32::from_rgb(22, 27, 38)),
-                                    );
-                                }
+                        ui.horizontal_wrapped(|ui| {
+                            if animated_action_button(
+                                ui,
+                                "hero_go_rec",
+                                Some(StudioIcon::Mic),
+                                t.news_go_recording,
+                                StudioPalette::ACCENT_EMERALD,
+                                true,
+                                Vec2::new(155.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                self.active_panel = ActivePanel::Recording;
+                            }
 
-                                // Animated harmonic sine waves
-                                let n = 64usize;
-                                for (freq, amp_f, col, speed) in [
-                                    (2.2_f64, 0.34_f32, StudioPalette::ACCENT_CYAN, 1.8_f64),
-                                    (3.5_f64, 0.24_f32, StudioPalette::ACCENT_PURPLE, -1.3_f64),
-                                    (1.4_f64, 0.18_f32, StudioPalette::ACCENT_EMERALD, 2.5_f64),
-                                ] {
-                                    let pts: Vec<Pos2> = (0..=n)
-                                        .map(|i| {
-                                            let xf = i as f32 / n as f32;
-                                            let env = (xf * std::f32::consts::PI).sin();
-                                            let wave = ((xf as f64 * std::f64::consts::TAU * freq)
-                                                + time * speed)
-                                                .sin()
-                                                as f32;
-                                            let x = rect.left() + 10.0 + xf * (rect.width() - 20.0);
-                                            let y =
-                                                rect.center().y + wave * env * rect.height() * amp_f;
-                                            Pos2::new(x, y)
-                                        })
-                                        .collect();
-                                    painter.add(egui::Shape::line(pts, Stroke::new(2.2_f32, col)));
-                                }
+                            if animated_action_button(
+                                ui,
+                                "hero_open_vst_dir",
+                                Some(StudioIcon::Folder),
+                                t.settings_open_vst_folder,
+                                StudioPalette::ACCENT_BLUE,
+                                false,
+                                Vec2::new(165.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                self.open_active_vst_folder();
+                            }
 
-                                painter.text(
-                                    Pos2::new(rect.left() + 12.0, rect.top() + 12.0),
-                                    Align2::LEFT_TOP,
-                                    format!(
-                                        "{} VSTs  |  {} Hz",
-                                        self.discovered_plugins.len(),
-                                        self.sample_rate
-                                    ),
-                                    FontId::monospace(11.5),
-                                    StudioPalette::TEXT_SECONDARY,
-                                );
+                            if animated_action_button(
+                                ui,
+                                "hero_go_settings",
+                                Some(StudioIcon::Gear),
+                                t.nav_settings,
+                                StudioPalette::BG_ELEVATED,
+                                false,
+                                Vec2::new(120.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                self.active_panel = ActivePanel::Settings;
                             }
                         });
-                    });
-                },
-            );
+                    },
+                );
 
-            ui.add_space(16.0);
+                ui.add_space(12.0);
 
-            // 3-Step Quick Workflow Cards
-            icon_heading(
-                ui,
-                StudioIcon::Bolt,
-                StudioPalette::ACCENT_AMBER,
-                t.news_quickstart_title.trim(),
-                16.5,
-            );
-            ui.add_space(6.0);
+                // 3-Step Quick Workflow Cards (3 columns on wide windows, 1 column on narrow tiled windows)
+                icon_heading(
+                    ui,
+                    StudioIcon::Bolt,
+                    StudioPalette::ACCENT_AMBER,
+                    t.news_quickstart_title.trim(),
+                    15.5,
+                );
+                ui.add_space(6.0);
 
-            let mut target_panel: Option<ActivePanel> = None;
-            ui.columns(3, |cols| {
-                for (col_idx, (title, desc, accent, panel)) in [
+                let steps = [
                     (
                         t.news_step1_title,
                         t.news_step1_desc,
@@ -974,12 +925,17 @@ impl ChronomixApp {
                         StudioPalette::ACCENT_CYAN,
                         ActivePanel::Recording,
                     ),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    studio_card(&mut cols[col_idx], Some(accent), Margin::same(14), |ui| {
-                        ui.label(RichText::new(title).size(14.5).strong().color(accent));
+                ];
+
+                let mut target_panel: Option<ActivePanel> = None;
+                let render_step = |ui: &mut egui::Ui,
+                                   title: &str,
+                                   desc: &str,
+                                   accent: Color32,
+                                   panel: ActivePanel,
+                                   target: &mut Option<ActivePanel>| {
+                    studio_card(ui, Some(accent), Margin::same(12), |ui| {
+                        ui.label(RichText::new(title).size(14.0).strong().color(accent));
                         ui.add_space(4.0);
                         ui.add(
                             egui::Label::new(
@@ -989,66 +945,86 @@ impl ChronomixApp {
                             )
                             .wrap(),
                         );
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                         let go_label = if panel == ActivePanel::Settings {
                             format!("{} ->", t.nav_settings)
                         } else {
                             format!("{} ->", t.nav_recording)
                         };
                         if ui.small_button(RichText::new(go_label).color(accent)).clicked() {
-                            target_panel = Some(panel);
+                            *target = Some(panel);
                         }
                     });
+                };
+
+                if ui.available_width() >= 680.0 {
+                    ui.columns(3, |cols| {
+                        for (col_idx, (title, desc, accent, panel)) in steps.into_iter().enumerate() {
+                            render_step(
+                                &mut cols[col_idx],
+                                title,
+                                desc,
+                                accent,
+                                panel,
+                                &mut target_panel,
+                            );
+                        }
+                    });
+                } else {
+                    for (title, desc, accent, panel) in steps {
+                        render_step(ui, title, desc, accent, panel, &mut target_panel);
+                        ui.add_space(6.0);
+                    }
                 }
-            });
-            if let Some(p) = target_panel {
-                self.active_panel = p;
-            }
 
-            ui.add_space(16.0);
-            icon_heading(
-                ui,
-                StudioIcon::Sparkle,
-                StudioPalette::ACCENT_CYAN,
-                t.news_section_title,
-                16.5,
-            );
-            ui.add_space(6.0);
+                if let Some(p) = target_panel {
+                    self.active_panel = p;
+                }
 
-            for item in t.news_items {
-                studio_card(ui, None, Margin::same(14), |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        egui::Frame::new()
-                            .fill(Color32::from_rgba_unmultiplied(59, 130, 246, 45))
-                            .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_BLUE))
-                            .corner_radius(CornerRadius::same(6))
-                            .inner_margin(Margin::symmetric(8, 2))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(item.tag)
-                                        .small()
-                                        .strong()
-                                        .color(StudioPalette::ACCENT_CYAN),
-                                );
-                            });
-                        ui.label(
-                            RichText::new(item.title)
-                                .size(14.5)
-                                .strong()
-                                .color(Color32::WHITE),
+                ui.add_space(12.0);
+                icon_heading(
+                    ui,
+                    StudioIcon::Sparkle,
+                    StudioPalette::ACCENT_CYAN,
+                    t.news_section_title,
+                    15.5,
+                );
+                ui.add_space(6.0);
+
+                for item in t.news_items {
+                    studio_card(ui, None, Margin::same(12), |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            egui::Frame::new()
+                                .fill(Color32::from_rgba_unmultiplied(59, 130, 246, 45))
+                                .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_BLUE))
+                                .corner_radius(CornerRadius::same(2))
+                                .inner_margin(Margin::symmetric(7, 2))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new(item.tag)
+                                            .small()
+                                            .strong()
+                                            .color(StudioPalette::ACCENT_CYAN),
+                                    );
+                                });
+                            ui.label(
+                                RichText::new(item.title)
+                                    .size(14.0)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(item.summary).color(StudioPalette::TEXT_SECONDARY),
+                            )
+                            .wrap(),
                         );
                     });
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(item.summary).color(StudioPalette::TEXT_SECONDARY),
-                        )
-                        .wrap(),
-                    );
-                });
-                ui.add_space(8.0);
-            }
-        });
+                    ui.add_space(6.0);
+                }
+            });
     }
 
     /// Settings (`Ajustes`) panel for managing the program VST folder, custom VST folder, and VST2/VST3 library.
@@ -1057,294 +1033,29 @@ impl ChronomixApp {
         let active_dir = self.active_vst_dir();
         let is_custom = self.custom_vst_dir.is_some();
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.add_space(4.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(4.0);
 
-            studio_card(
-                ui,
-                Some(StudioPalette::ACCENT_BLUE),
-                Margin::same(18),
-                |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        icon_heading(
-                            ui,
-                            StudioIcon::Gear,
-                            StudioPalette::ACCENT_CYAN,
-                            t.settings_title,
-                            20.0,
-                        );
-                        let (badge_text, badge_color) = if is_custom {
-                            (t.settings_mode_custom, StudioPalette::ACCENT_AMBER)
-                        } else {
-                            (t.settings_mode_program, StudioPalette::ACCENT_EMERALD)
-                        };
-                        egui::Frame::new()
-                            .fill(Color32::from_rgba_unmultiplied(
-                                badge_color.r(),
-                                badge_color.g(),
-                                badge_color.b(),
-                                40,
-                            ))
-                            .stroke(Stroke::new(1.0_f32, badge_color))
-                            .corner_radius(CornerRadius::same(12))
-                            .inner_margin(Margin::symmetric(10, 3))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(badge_text)
-                                        .small()
-                                        .strong()
-                                        .color(badge_color),
-                                );
-                            });
-                    });
-
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(t.settings_subtitle).color(StudioPalette::TEXT_SECONDARY),
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new(t.settings_vst_folder_heading)
-                            .size(15.0)
-                            .strong()
-                            .color(StudioPalette::ACCENT_CYAN),
-                    );
-                    ui.add_space(6.0);
-
-                    // Active VST Folder Path Display Box
-                    egui::Frame::new()
-                        .fill(StudioPalette::BG_INPUT)
-                        .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_BRIGHT))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::symmetric(14, 10))
-                        .show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                let (ic_rect, _) =
-                                    ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                                draw_vector_icon(
-                                    ui.painter(),
-                                    ic_rect.center(),
-                                    14.0,
-                                    StudioIcon::Folder,
-                                    StudioPalette::ACCENT_CYAN,
-                                );
-                                ui.label(
-                                    RichText::new(t.settings_active_folder_label)
-                                        .strong()
-                                        .color(StudioPalette::TEXT_SECONDARY),
-                                );
-                                ui.label(
-                                    RichText::new(active_dir.display().to_string())
-                                        .monospace()
-                                        .strong()
-                                        .color(StudioPalette::ACCENT_CYAN),
-                                );
-                            });
-                        });
-
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(t.settings_vst_folder_desc)
-                                .small()
-                                .color(StudioPalette::TEXT_SECONDARY),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(14.0);
-
-                    // Action Buttons Row
-                    ui.horizontal_wrapped(|ui| {
-                        if animated_action_button(
-                            ui,
-                            "settings_open_vst_folder",
-                            Some(StudioIcon::Folder),
-                            t.settings_open_vst_folder,
-                            StudioPalette::ACCENT_EMERALD,
-                            true,
-                            Vec2::new(190.0, 36.0),
-                        )
-                        .clicked()
-                        {
-                            self.open_active_vst_folder();
-                        }
-
-                        if animated_action_button(
-                            ui,
-                            "settings_choose_custom",
-                            Some(StudioIcon::Folder),
-                            t.settings_choose_custom_folder,
-                            StudioPalette::ACCENT_BLUE,
-                            false,
-                            Vec2::new(210.0, 36.0),
-                        )
-                        .clicked()
-                        {
-                            if let Some(folder) = rfd::FileDialog::new()
-                                .set_title(t.dialog_select_vst_folder)
-                                .set_directory(&active_dir)
-                                .pick_folder()
-                            {
-                                let _ = std::fs::create_dir_all(&folder);
-                                self.custom_vst_dir = Some(folder.clone());
-                                self.save_settings();
-                                self.status = StatusState::UpdatedVstFolder(folder);
-                                self.start_scan();
-                            }
-                        }
-
-                        if is_custom
-                            && animated_action_button(
-                                ui,
-                                "settings_reset_program_folder",
-                                Some(StudioIcon::Refresh),
-                                t.settings_use_program_folder,
-                                StudioPalette::ACCENT_AMBER,
-                                false,
-                                Vec2::new(190.0, 36.0),
-                            )
-                            .clicked()
-                        {
-                            self.custom_vst_dir = None;
-                            self.save_settings();
-                            let prog_dir = self.program_vst_dir.clone();
-                            self.status = StatusState::UpdatedVstFolder(prog_dir);
-                            self.start_scan();
-                        }
-
-                        let scan_label = if self.is_scanning {
-                            t.scanning
-                        } else {
-                            t.settings_scan_now
-                        };
-                        if animated_action_button(
-                            ui,
-                            "settings_scan_now",
-                            Some(StudioIcon::Refresh),
-                            scan_label,
-                            StudioPalette::ACCENT_PURPLE,
-                            self.is_scanning,
-                            Vec2::new(170.0, 36.0),
-                        )
-                        .clicked()
-                        {
-                            self.start_scan();
-                        }
-                    });
-
-                    ui.add_space(10.0);
-                    if animated_led_toggle(
-                        ui,
-                        "settings_include_sys_toggle",
-                        &mut self.include_system_vst,
-                        t.settings_include_system_vst,
-                        StudioPalette::ACCENT_CYAN,
-                    ) {
-                        self.save_settings();
-                        self.start_scan();
-                    }
-                },
-            );
-
-            ui.add_space(16.0);
-
-            // Detected Plugins Header + Search Filter
-            ui.horizontal_wrapped(|ui| {
-                icon_heading(
+                studio_card(
                     ui,
-                    StudioIcon::Sliders,
-                    StudioPalette::ACCENT_PURPLE,
-                    t.settings_detected_heading,
-                    17.0,
-                );
-                egui::Frame::new()
-                    .fill(StudioPalette::BG_ELEVATED)
-                    .corner_radius(CornerRadius::same(10))
-                    .inner_margin(Margin::symmetric(8, 2))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(format!("{}", self.discovered_plugins.len()))
-                                .small()
-                                .strong()
-                                .color(StudioPalette::ACCENT_CYAN),
-                        );
-                    });
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.library_filter)
-                            .desired_width(240.0)
-                            .hint_text(t.settings_search_hint),
-                    );
-                    let (sr, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                    draw_vector_icon(
-                        ui.painter(),
-                        sr.center(),
-                        13.0,
-                        StudioIcon::Search,
-                        StudioPalette::TEXT_SECONDARY,
-                    );
-                });
-            });
-            ui.add_space(8.0);
-
-            if self.discovered_plugins.is_empty() {
-                studio_card(ui, None, Margin::same(18), |ui| {
-                    ui.vertical_centered(|ui| {
-                        let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
-                        draw_vector_icon(
-                            ui.painter(),
-                            r.center(),
-                            24.0,
-                            StudioIcon::Folder,
-                            StudioPalette::TEXT_MUTED,
-                        );
-                        ui.add_space(4.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(t.settings_no_plugins_in_folder)
-                                    .color(StudioPalette::TEXT_SECONDARY),
-                            )
-                            .wrap(),
-                        );
-                    });
-                });
-            } else {
-                let filter_q = self.library_filter.trim().to_lowercase();
-                let mut plugin_to_load: Option<PathBuf> = None;
-
-                for (idx, plugin) in self.discovered_plugins.iter().enumerate() {
-                    if !filter_q.is_empty()
-                        && !plugin.name.to_lowercase().contains(&filter_q)
-                        && !plugin.vendor.to_lowercase().contains(&filter_q)
-                        && !plugin.category.to_lowercase().contains(&filter_q)
-                    {
-                        continue;
-                    }
-
-                    let is_vst2 = plugin.category.contains("VST2")
-                        || plugin
-                            .path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .is_some_and(|e| {
-                                e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("so")
-                            });
-                    let badge_label = if !plugin.category.is_empty() {
-                        plugin.category.as_str()
-                    } else if is_vst2 {
-                        "VST2"
-                    } else {
-                        "VST3"
-                    };
-                    let badge_color = if is_vst2 {
-                        StudioPalette::ACCENT_PURPLE
-                    } else {
-                        StudioPalette::ACCENT_CYAN
-                    };
-
-                    studio_card(ui, Some(badge_color), Margin::symmetric(14, 10), |ui| {
+                    Some(StudioPalette::ACCENT_BLUE),
+                    Margin::same(14),
+                    |ui| {
                         ui.horizontal_wrapped(|ui| {
+                            icon_heading(
+                                ui,
+                                StudioIcon::Gear,
+                                StudioPalette::ACCENT_CYAN,
+                                t.settings_title,
+                                18.0,
+                            );
+                            let (badge_text, badge_color) = if is_custom {
+                                (t.settings_mode_custom, StudioPalette::ACCENT_AMBER)
+                            } else {
+                                (t.settings_mode_program, StudioPalette::ACCENT_EMERALD)
+                            };
                             egui::Frame::new()
                                 .fill(Color32::from_rgba_unmultiplied(
                                     badge_color.r(),
@@ -1353,67 +1064,332 @@ impl ChronomixApp {
                                     40,
                                 ))
                                 .stroke(Stroke::new(1.0_f32, badge_color))
-                                .corner_radius(CornerRadius::same(6))
+                                .corner_radius(CornerRadius::same(2))
                                 .inner_margin(Margin::symmetric(8, 2))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        RichText::new(badge_label)
+                                        RichText::new(badge_text)
                                             .small()
                                             .strong()
                                             .color(badge_color),
                                     );
                                 });
+                        });
 
-                            ui.label(
-                                RichText::new(&plugin.name)
-                                    .size(14.5)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            );
-                            ui.label(
-                                RichText::new(format!("| {}", plugin.vendor))
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(t.settings_subtitle).color(StudioPalette::TEXT_SECONDARY),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(t.settings_vst_folder_heading)
+                                .size(14.5)
+                                .strong()
+                                .color(StudioPalette::ACCENT_CYAN),
+                        );
+                        ui.add_space(6.0);
+
+                        // Active VST Folder Path Display Box
+                        egui::Frame::new()
+                            .fill(StudioPalette::BG_INPUT)
+                            .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_BRIGHT))
+                            .corner_radius(CornerRadius::same(2))
+                            .inner_margin(Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    let (ic_rect, _) =
+                                        ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                                    draw_vector_icon(
+                                        ui.painter(),
+                                        ic_rect.center(),
+                                        14.0,
+                                        StudioIcon::Folder,
+                                        StudioPalette::ACCENT_CYAN,
+                                    );
+                                    ui.label(
+                                        RichText::new(t.settings_active_folder_label)
+                                            .strong()
+                                            .color(StudioPalette::TEXT_SECONDARY),
+                                    );
+                                    ui.label(
+                                        RichText::new(active_dir.display().to_string())
+                                            .monospace()
+                                            .strong()
+                                            .color(StudioPalette::ACCENT_CYAN),
+                                    );
+                                });
+                            });
+
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(t.settings_vst_folder_desc)
                                     .small()
                                     .color(StudioPalette::TEXT_SECONDARY),
-                            );
-                            ui.label(
-                                RichText::new(plugin.path.display().to_string())
-                                    .small()
-                                    .monospace()
-                                    .color(StudioPalette::TEXT_MUTED),
-                            );
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(10.0);
 
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if animated_action_button(
-                                        ui,
-                                        &format!("load_lib_plugin_{idx}"),
-                                        Some(StudioIcon::Play),
-                                        t.settings_load_in_recording,
-                                        StudioPalette::ACCENT_EMERALD,
-                                        false,
-                                        Vec2::new(155.0, 28.0),
-                                    )
-                                    .clicked()
-                                    {
-                                        plugin_to_load = Some(plugin.path.clone());
-                                    }
-                                },
+                        // Action Buttons Row
+                        ui.horizontal_wrapped(|ui| {
+                            if animated_action_button(
+                                ui,
+                                "settings_open_vst_folder",
+                                Some(StudioIcon::Folder),
+                                t.settings_open_vst_folder,
+                                StudioPalette::ACCENT_EMERALD,
+                                true,
+                                Vec2::new(165.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                self.open_active_vst_folder();
+                            }
+
+                            if animated_action_button(
+                                ui,
+                                "settings_choose_custom",
+                                Some(StudioIcon::Folder),
+                                t.settings_choose_custom_folder,
+                                StudioPalette::ACCENT_BLUE,
+                                false,
+                                Vec2::new(180.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                if let Some(folder) = rfd::FileDialog::new()
+                                    .set_title(t.dialog_select_vst_folder)
+                                    .set_directory(&active_dir)
+                                    .pick_folder()
+                                {
+                                    let _ = std::fs::create_dir_all(&folder);
+                                    self.custom_vst_dir = Some(folder.clone());
+                                    self.save_settings();
+                                    self.status = StatusState::UpdatedVstFolder(folder);
+                                    self.start_scan();
+                                }
+                            }
+
+                            if is_custom
+                                && animated_action_button(
+                                    ui,
+                                    "settings_reset_program_folder",
+                                    Some(StudioIcon::Refresh),
+                                    t.settings_use_program_folder,
+                                    StudioPalette::ACCENT_AMBER,
+                                    false,
+                                    Vec2::new(165.0, 32.0),
+                                )
+                                .clicked()
+                            {
+                                self.custom_vst_dir = None;
+                                self.save_settings();
+                                let prog_dir = self.program_vst_dir.clone();
+                                self.status = StatusState::UpdatedVstFolder(prog_dir);
+                                self.start_scan();
+                            }
+
+                            let scan_label = if self.is_scanning {
+                                t.scanning
+                            } else {
+                                t.settings_scan_now
+                            };
+                            if animated_action_button(
+                                ui,
+                                "settings_scan_now",
+                                Some(StudioIcon::Refresh),
+                                scan_label,
+                                StudioPalette::ACCENT_PURPLE,
+                                self.is_scanning,
+                                Vec2::new(150.0, 32.0),
+                            )
+                            .clicked()
+                            {
+                                self.start_scan();
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        if animated_led_toggle(
+                            ui,
+                            "settings_include_sys_toggle",
+                            &mut self.include_system_vst,
+                            t.settings_include_system_vst,
+                            StudioPalette::ACCENT_CYAN,
+                        ) {
+                            self.save_settings();
+                            self.start_scan();
+                        }
+                    },
+                );
+
+                ui.add_space(12.0);
+
+                // Detected Plugins Header + Search Filter (wraps cleanly on narrow windows)
+                ui.horizontal_wrapped(|ui| {
+                    icon_heading(
+                        ui,
+                        StudioIcon::Sliders,
+                        StudioPalette::ACCENT_PURPLE,
+                        t.settings_detected_heading,
+                        16.0,
+                    );
+                    egui::Frame::new()
+                        .fill(StudioPalette::BG_ELEVATED)
+                        .corner_radius(CornerRadius::same(2))
+                        .inner_margin(Margin::symmetric(7, 2))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(format!("{}", self.discovered_plugins.len()))
+                                    .small()
+                                    .strong()
+                                    .color(StudioPalette::ACCENT_CYAN),
+                            );
+                        });
+
+                    let (sr, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                    draw_vector_icon(
+                        ui.painter(),
+                        sr.center(),
+                        13.0,
+                        StudioIcon::Search,
+                        StudioPalette::TEXT_SECONDARY,
+                    );
+                    let search_w = (ui.available_width() - 12.0).clamp(120.0, 240.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.library_filter)
+                            .desired_width(search_w)
+                            .hint_text(t.settings_search_hint),
+                    );
+                });
+                ui.add_space(6.0);
+
+                if self.discovered_plugins.is_empty() {
+                    studio_card(ui, None, Margin::same(14), |ui| {
+                        ui.vertical_centered(|ui| {
+                            let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::hover());
+                            draw_vector_icon(
+                                ui.painter(),
+                                r.center(),
+                                24.0,
+                                StudioIcon::Folder,
+                                StudioPalette::TEXT_MUTED,
+                            );
+                            ui.add_space(4.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(t.settings_no_plugins_in_folder)
+                                        .color(StudioPalette::TEXT_SECONDARY),
+                                )
+                                .wrap(),
                             );
                         });
                     });
-                    ui.add_space(6.0);
-                }
+                } else {
+                    let filter_q = self.library_filter.trim().to_lowercase();
+                    let mut plugin_to_load: Option<PathBuf> = None;
 
-                if let Some(path) = plugin_to_load {
-                    self.load_plugin_from_path(path);
-                    self.active_panel = ActivePanel::Recording;
+                    for (idx, plugin) in self.discovered_plugins.iter().enumerate() {
+                        if !filter_q.is_empty()
+                            && !plugin.name.to_lowercase().contains(&filter_q)
+                            && !plugin.vendor.to_lowercase().contains(&filter_q)
+                            && !plugin.category.to_lowercase().contains(&filter_q)
+                        {
+                            continue;
+                        }
+
+                        let is_vst2 = plugin.category.contains("VST2")
+                            || plugin
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .is_some_and(|e| {
+                                    e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("so")
+                                });
+                        let badge_label = if !plugin.category.is_empty() {
+                            plugin.category.as_str()
+                        } else if is_vst2 {
+                            "VST2"
+                        } else {
+                            "VST3"
+                        };
+                        let badge_color = if is_vst2 {
+                            StudioPalette::ACCENT_PURPLE
+                        } else {
+                            StudioPalette::ACCENT_CYAN
+                        };
+
+                        studio_card(ui, Some(badge_color), Margin::symmetric(12, 8), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                egui::Frame::new()
+                                    .fill(Color32::from_rgba_unmultiplied(
+                                        badge_color.r(),
+                                        badge_color.g(),
+                                        badge_color.b(),
+                                        40,
+                                    ))
+                                    .stroke(Stroke::new(1.0_f32, badge_color))
+                                    .corner_radius(CornerRadius::same(2))
+                                    .inner_margin(Margin::symmetric(7, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new(badge_label)
+                                                .small()
+                                                .strong()
+                                                .color(badge_color),
+                                        );
+                                    });
+
+                                ui.label(
+                                    RichText::new(&plugin.name)
+                                        .size(14.0)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                );
+                                ui.label(
+                                    RichText::new(format!("| {}", plugin.vendor))
+                                        .small()
+                                        .color(StudioPalette::TEXT_SECONDARY),
+                                );
+
+                                if animated_action_button(
+                                    ui,
+                                    &format!("load_lib_plugin_{idx}"),
+                                    Some(StudioIcon::Play),
+                                    t.settings_load_in_recording,
+                                    StudioPalette::ACCENT_EMERALD,
+                                    false,
+                                    Vec2::new(140.0, 26.0),
+                                )
+                                .clicked()
+                                {
+                                    plugin_to_load = Some(plugin.path.clone());
+                                }
+                            });
+
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(plugin.path.display().to_string())
+                                        .small()
+                                        .monospace()
+                                        .color(StudioPalette::TEXT_MUTED),
+                                )
+                                .truncate(),
+                            );
+                        });
+                        ui.add_space(5.0);
+                    }
+
+                    if let Some(path) = plugin_to_load {
+                        self.load_plugin_from_path(path);
+                        self.active_panel = ActivePanel::Recording;
+                    }
                 }
-            }
-        });
+            });
     }
 
-    /// Visual interactive signal-flow bar (`Input -> VST Effect -> Output -> Record`) at the top of Recording.
+    /// Visual signal-flow bar (`Input -> VST Effect -> Output -> Record`) at the top of Recording.
     fn render_signal_chain_banner(&mut self, ui: &mut egui::Ui) {
         let t = self.lang.text();
         let time = ui.input(|i| i.time);
@@ -1438,7 +1414,9 @@ impl ChronomixApp {
             .map(|m| m.info.name.as_str())
             .unwrap_or(t.chain_clean);
 
-        studio_card(ui, None, Margin::symmetric(14, 10), |ui| {
+        let show_pipes = ui.available_width() >= 680.0;
+
+        studio_card(ui, None, Margin::symmetric(12, 8), |ui| {
             ui.horizontal_wrapped(|ui| {
                 // Node 1: Input
                 draw_signal_node(
@@ -1453,7 +1431,9 @@ impl ChronomixApp {
                     },
                 );
 
-                draw_animated_signal_pipe(ui, running, time, StudioPalette::ACCENT_EMERALD);
+                if show_pipes {
+                    draw_animated_signal_pipe(ui, running, time, StudioPalette::ACCENT_EMERALD);
+                }
 
                 // Node 2: VST Effect
                 let fx_col = if self.loaded_plugin.is_some() && !self.bypass {
@@ -1465,12 +1445,14 @@ impl ChronomixApp {
                 };
                 draw_signal_node(ui, StudioIcon::Sliders, t.chain_effect, fx_name, fx_col);
 
-                draw_animated_signal_pipe(
-                    ui,
-                    running && !self.monitor_muted,
-                    time,
-                    StudioPalette::ACCENT_CYAN,
-                );
+                if show_pipes {
+                    draw_animated_signal_pipe(
+                        ui,
+                        running && !self.monitor_muted,
+                        time,
+                        StudioPalette::ACCENT_CYAN,
+                    );
+                }
 
                 // Node 3: Output
                 draw_signal_node(
@@ -1485,7 +1467,9 @@ impl ChronomixApp {
                     },
                 );
 
-                draw_animated_signal_pipe(ui, recording, time, StudioPalette::ACCENT_CRIMSON);
+                if show_pipes {
+                    draw_animated_signal_pipe(ui, recording, time, StudioPalette::ACCENT_CRIMSON);
+                }
 
                 // Node 4: WAV Recorder
                 let rec_sub = if recording {
@@ -1522,7 +1506,7 @@ impl ChronomixApp {
             } else {
                 StudioPalette::BORDER_SUBTLE
             }),
-            Margin::symmetric(14, 10),
+            Margin::symmetric(12, 8),
             |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let (monitor_icon, monitor_label, monitor_col) = if running {
@@ -1545,7 +1529,7 @@ impl ChronomixApp {
                         monitor_label,
                         monitor_col,
                         running,
-                        Vec2::new(175.0, 36.0),
+                        Vec2::new(155.0, 32.0),
                     )
                     .clicked()
                     {
@@ -1566,7 +1550,7 @@ impl ChronomixApp {
                         &rec_label,
                         StudioPalette::ACCENT_CRIMSON,
                         recording,
-                        Vec2::new(150.0, 36.0),
+                        Vec2::new(135.0, 32.0),
                     )
                     .clicked()
                     {
@@ -1592,7 +1576,7 @@ impl ChronomixApp {
                             .color(StudioPalette::TEXT_SECONDARY),
                     );
                     egui::ComboBox::from_id_salt("sr_combo")
-                        .width(92.0)
+                        .width(88.0)
                         .selected_text(format!("{} Hz", self.sample_rate))
                         .show_ui(ui, |ui| {
                             for sr in [44_100, 48_000, 96_000] {
@@ -1610,7 +1594,7 @@ impl ChronomixApp {
                             .color(StudioPalette::TEXT_SECONDARY),
                     );
                     egui::ComboBox::from_id_salt("buf_combo")
-                        .width(78.0)
+                        .width(74.0)
                         .selected_text(format!("{}", self.block_size))
                         .show_ui(ui, |ui| {
                             for bs in [64, 128, 256, 512, 1024] {
@@ -1625,8 +1609,8 @@ impl ChronomixApp {
                     egui::Frame::new()
                         .fill(StudioPalette::BG_INPUT)
                         .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
-                        .corner_radius(CornerRadius::same(8))
-                        .inner_margin(Margin::symmetric(10, 4))
+                        .corner_radius(CornerRadius::same(2))
+                        .inner_margin(Margin::symmetric(8, 3))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(format!("~{est_ms:.1} ms"))
@@ -1644,170 +1628,179 @@ impl ChronomixApp {
         );
     }
 
-    fn render_io_section(&mut self, ui: &mut egui::Ui) {
+    fn render_input_channel_card(&mut self, ui: &mut egui::Ui, restart_needed: &mut bool) {
         let t = self.lang.text();
         let lang = self.lang;
+
+        studio_card(
+            ui,
+            Some(StudioPalette::ACCENT_EMERALD),
+            Margin::same(12),
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    icon_heading(
+                        ui,
+                        StudioIcon::Mic,
+                        StudioPalette::ACCENT_EMERALD,
+                        t.input_device_heading,
+                        14.0,
+                    );
+                    if ui.small_button(t.refresh).clicked() {
+                        self.refresh_devices();
+                    }
+                });
+
+                ui.add_space(4.0);
+                let prev_in = self.selected_input.clone();
+                let selected_input_label = self
+                    .input_devices
+                    .iter()
+                    .find(|d| d.id == self.selected_input)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or(t.none);
+                let combo_w = (ui.available_width() - 8.0).max(80.0);
+                egui::ComboBox::from_id_salt("input_device_combo")
+                    .width(combo_w)
+                    .selected_text(selected_input_label)
+                    .show_ui(ui, |ui| {
+                        for dev in &self.input_devices {
+                            let label = lang.device_label(
+                                &dev.name,
+                                dev.default_channels,
+                                dev.default_sample_rate,
+                            );
+                            ui.selectable_value(&mut self.selected_input, dev.id.clone(), label);
+                        }
+                    });
+                if self.selected_input != prev_in {
+                    *restart_needed = true;
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if draw_rotary_knob(
+                        ui,
+                        "knob_input_gain",
+                        t.input_gain_db,
+                        &mut self.input_gain_db,
+                        -60.0..=24.0,
+                        0.0,
+                        "dB",
+                        StudioPalette::ACCENT_EMERALD,
+                    ) {
+                        self.engine.shared.set_input_gain_db(self.input_gain_db);
+                    }
+
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(10.0);
+                        draw_studio_vu_meter(
+                            ui,
+                            t.meter_in,
+                            self.meters.in_left,
+                            self.meters.in_right,
+                            self.peak_hold.in_left,
+                            self.peak_hold.in_right,
+                        );
+                    });
+                });
+            },
+        );
+    }
+
+    fn render_output_channel_card(&mut self, ui: &mut egui::Ui, restart_needed: &mut bool) {
+        let t = self.lang.text();
+        let lang = self.lang;
+
+        studio_card(
+            ui,
+            Some(StudioPalette::ACCENT_CYAN),
+            Margin::same(12),
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    icon_heading(
+                        ui,
+                        StudioIcon::Headphones,
+                        StudioPalette::ACCENT_CYAN,
+                        t.output_device_heading,
+                        14.0,
+                    );
+                    if ui.small_button(t.refresh).clicked() {
+                        self.refresh_devices();
+                    }
+                });
+
+                ui.add_space(4.0);
+                let prev_out = self.selected_output.clone();
+                let selected_output_label = self
+                    .output_devices
+                    .iter()
+                    .find(|d| d.id == self.selected_output)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or(t.none);
+                let combo_w = (ui.available_width() - 8.0).max(80.0);
+                egui::ComboBox::from_id_salt("output_device_combo")
+                    .width(combo_w)
+                    .selected_text(selected_output_label)
+                    .show_ui(ui, |ui| {
+                        for dev in &self.output_devices {
+                            let label = lang.device_label(
+                                &dev.name,
+                                dev.default_channels,
+                                dev.default_sample_rate,
+                            );
+                            ui.selectable_value(&mut self.selected_output, dev.id.clone(), label);
+                        }
+                    });
+                if self.selected_output != prev_out {
+                    *restart_needed = true;
+                }
+
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if draw_rotary_knob(
+                        ui,
+                        "knob_output_gain",
+                        t.output_gain_db,
+                        &mut self.output_gain_db,
+                        -60.0..=12.0,
+                        0.0,
+                        "dB",
+                        StudioPalette::ACCENT_CYAN,
+                    ) {
+                        self.engine.shared.set_output_gain_db(self.output_gain_db);
+                    }
+
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(10.0);
+                        draw_studio_vu_meter(
+                            ui,
+                            t.meter_out,
+                            self.meters.out_left,
+                            self.meters.out_right,
+                            self.peak_hold.out_left,
+                            self.peak_hold.out_right,
+                        );
+                    });
+                });
+            },
+        );
+    }
+
+    fn render_io_section(&mut self, ui: &mut egui::Ui) {
         let mut restart_needed = false;
 
-        ui.columns(2, |cols| {
-            // Input Channel Strip Card
-            studio_card(
-                &mut cols[0],
-                Some(StudioPalette::ACCENT_EMERALD),
-                Margin::same(14),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        icon_heading(
-                            ui,
-                            StudioIcon::Mic,
-                            StudioPalette::ACCENT_EMERALD,
-                            t.input_device_heading,
-                            14.0,
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(t.refresh).clicked() {
-                                self.refresh_devices();
-                            }
-                        });
-                    });
-
-                    ui.add_space(4.0);
-                    let prev_in = self.selected_input.clone();
-                    let selected_input_label = self
-                        .input_devices
-                        .iter()
-                        .find(|d| d.id == self.selected_input)
-                        .map(|d| d.name.as_str())
-                        .unwrap_or(t.none);
-                    egui::ComboBox::from_id_salt("input_device_combo")
-                        .width(ui.available_width())
-                        .selected_text(selected_input_label)
-                        .show_ui(ui, |ui| {
-                            for dev in &self.input_devices {
-                                let label = lang.device_label(
-                                    &dev.name,
-                                    dev.default_channels,
-                                    dev.default_sample_rate,
-                                );
-                                ui.selectable_value(&mut self.selected_input, dev.id.clone(), label);
-                            }
-                        });
-                    if self.selected_input != prev_in {
-                        restart_needed = true;
-                    }
-
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if draw_rotary_knob(
-                            ui,
-                            "knob_input_gain",
-                            t.input_gain_db,
-                            &mut self.input_gain_db,
-                            -60.0..=24.0,
-                            0.0,
-                            "dB",
-                            StudioPalette::ACCENT_EMERALD,
-                        ) {
-                            self.engine.shared.set_input_gain_db(self.input_gain_db);
-                        }
-
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.add_space(14.0);
-                            draw_studio_vu_meter(
-                                ui,
-                                t.meter_in,
-                                self.meters.in_left,
-                                self.meters.in_right,
-                                self.peak_hold.in_left,
-                                self.peak_hold.in_right,
-                            );
-                        });
-                    });
-                },
-            );
-
-            // Output Channel Strip Card
-            studio_card(
-                &mut cols[1],
-                Some(StudioPalette::ACCENT_CYAN),
-                Margin::same(14),
-                |ui| {
-                    ui.horizontal(|ui| {
-                        icon_heading(
-                            ui,
-                            StudioIcon::Headphones,
-                            StudioPalette::ACCENT_CYAN,
-                            t.output_device_heading,
-                            14.0,
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(t.refresh).clicked() {
-                                self.refresh_devices();
-                            }
-                        });
-                    });
-
-                    ui.add_space(4.0);
-                    let prev_out = self.selected_output.clone();
-                    let selected_output_label = self
-                        .output_devices
-                        .iter()
-                        .find(|d| d.id == self.selected_output)
-                        .map(|d| d.name.as_str())
-                        .unwrap_or(t.none);
-                    egui::ComboBox::from_id_salt("output_device_combo")
-                        .width(ui.available_width())
-                        .selected_text(selected_output_label)
-                        .show_ui(ui, |ui| {
-                            for dev in &self.output_devices {
-                                let label = lang.device_label(
-                                    &dev.name,
-                                    dev.default_channels,
-                                    dev.default_sample_rate,
-                                );
-                                ui.selectable_value(
-                                    &mut self.selected_output,
-                                    dev.id.clone(),
-                                    label,
-                                );
-                            }
-                        });
-                    if self.selected_output != prev_out {
-                        restart_needed = true;
-                    }
-
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if draw_rotary_knob(
-                            ui,
-                            "knob_output_gain",
-                            t.output_gain_db,
-                            &mut self.output_gain_db,
-                            -60.0..=12.0,
-                            0.0,
-                            "dB",
-                            StudioPalette::ACCENT_CYAN,
-                        ) {
-                            self.engine.shared.set_output_gain_db(self.output_gain_db);
-                        }
-
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            ui.add_space(14.0);
-                            draw_studio_vu_meter(
-                                ui,
-                                t.meter_out,
-                                self.meters.out_left,
-                                self.meters.out_right,
-                                self.peak_hold.out_left,
-                                self.peak_hold.out_right,
-                            );
-                        });
-                    });
-                },
-            );
-        });
+        if ui.available_width() >= 680.0 {
+            ui.columns(2, |cols| {
+                self.render_input_channel_card(&mut cols[0], &mut restart_needed);
+                self.render_output_channel_card(&mut cols[1], &mut restart_needed);
+            });
+        } else {
+            self.render_input_channel_card(ui, &mut restart_needed);
+            ui.add_space(8.0);
+            self.render_output_channel_card(ui, &mut restart_needed);
+        }
 
         if restart_needed {
             self.restart_audio_if_running();
@@ -1820,7 +1813,7 @@ impl ChronomixApp {
         studio_card(
             ui,
             Some(StudioPalette::ACCENT_PURPLE),
-            Margin::same(16),
+            Margin::same(14),
             |ui| {
                 // Top Rack Header Bar
                 ui.horizontal_wrapped(|ui| {
@@ -1829,7 +1822,7 @@ impl ChronomixApp {
                         StudioIcon::Sliders,
                         StudioPalette::ACCENT_PURPLE,
                         t.vst3_slot_heading,
-                        16.0,
+                        15.0,
                     );
 
                     let scan_label = if self.is_scanning {
@@ -1844,7 +1837,7 @@ impl ChronomixApp {
                         scan_label,
                         StudioPalette::ACCENT_PURPLE,
                         self.is_scanning,
-                        Vec2::new(125.0, 30.0),
+                        Vec2::new(115.0, 28.0),
                     )
                     .clicked()
                     {
@@ -1858,7 +1851,7 @@ impl ChronomixApp {
                         t.open_vst_folder_btn,
                         StudioPalette::ACCENT_EMERALD,
                         false,
-                        Vec2::new(145.0, 30.0),
+                        Vec2::new(135.0, 28.0),
                     )
                     .clicked()
                     {
@@ -1872,7 +1865,7 @@ impl ChronomixApp {
                         t.open_file,
                         StudioPalette::ACCENT_BLUE,
                         false,
-                        Vec2::new(180.0, 30.0),
+                        Vec2::new(165.0, 28.0),
                     )
                     .clicked()
                     {
@@ -1904,7 +1897,7 @@ impl ChronomixApp {
                     }
                 });
 
-                // Quick Discovered Plugin Bar
+                // Quick Discovered Plugin Bar (responsive ComboBox width)
                 if !self.discovered_plugins.is_empty() {
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
@@ -1919,8 +1912,9 @@ impl ChronomixApp {
                             .and_then(|i| self.discovered_plugins.get(i))
                             .map(|p| format!("{} - {} [{}]", p.name, p.vendor, p.category))
                             .unwrap_or_else(|| t.select_plugin.into());
+                        let combo_w = (ui.available_width() - 165.0).clamp(110.0, 340.0);
                         egui::ComboBox::from_id_salt("discovered_vst3_combo")
-                            .width(360.0)
+                            .width(combo_w)
                             .selected_text(selected_label)
                             .show_ui(ui, |ui| {
                                 for (idx, p) in self.discovered_plugins.iter().enumerate() {
@@ -1940,7 +1934,7 @@ impl ChronomixApp {
                             t.load_selected,
                             StudioPalette::ACCENT_EMERALD,
                             false,
-                            Vec2::new(145.0, 28.0),
+                            Vec2::new(135.0, 28.0),
                         )
                         .clicked()
                         {
@@ -1958,7 +1952,7 @@ impl ChronomixApp {
                 // Optional Manual Path Loader
                 if self.show_path_loader {
                     ui.add_space(4.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.manual_plugin_path)
                                 .desired_width((ui.available_width() - 220.0).max(120.0))
@@ -2003,52 +1997,61 @@ impl ChronomixApp {
                                 StudioPalette::ACCENT_PURPLE
                             },
                         ))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::symmetric(14, 10))
+                        .corner_radius(CornerRadius::same(2))
+                        .inner_margin(Margin::symmetric(12, 8))
                         .show(ui, |ui| {
                             ui.horizontal_wrapped(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.label(
-                                            RichText::new(&meta.info.name)
-                                                .size(19.0)
-                                                .strong()
-                                                .color(Color32::WHITE),
-                                        );
-                                        if meta.is_wine_bridged {
-                                            egui::Frame::new()
-                                                .fill(Color32::from_rgba_unmultiplied(
-                                                    245, 158, 11, 40,
-                                                ))
-                                                .stroke(Stroke::new(
-                                                    1.0_f32,
-                                                    StudioPalette::ACCENT_AMBER,
-                                                ))
-                                                .corner_radius(CornerRadius::same(6))
-                                                .inner_margin(Margin::symmetric(7, 2))
-                                                .show(ui, |ui| {
-                                                    ui.label(
-                                                        RichText::new("WINE x64")
-                                                            .small()
-                                                            .strong()
-                                                            .color(StudioPalette::ACCENT_AMBER),
-                                                    );
-                                                });
-                                        }
-                                    });
-                                    ui.label(
-                                        RichText::new(self.lang.plugin_meta_details(
-                                            &meta.info.vendor,
-                                            &meta.info.version,
-                                            &meta.info.category,
-                                            meta.input_channels,
-                                            meta.output_channels,
-                                        ))
-                                        .small()
-                                        .color(StudioPalette::TEXT_SECONDARY),
-                                    );
-                                    ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new(&meta.info.name)
+                                        .size(17.0)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                );
+                                if meta.is_wine_bridged {
+                                    egui::Frame::new()
+                                        .fill(Color32::from_rgba_unmultiplied(245, 158, 11, 40))
+                                        .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_AMBER))
+                                        .corner_radius(CornerRadius::same(2))
+                                        .inner_margin(Margin::symmetric(6, 2))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                RichText::new("WINE x64")
+                                                    .small()
+                                                    .strong()
+                                                    .color(StudioPalette::ACCENT_AMBER),
+                                            );
+                                        });
+                                }
+                                ui.label(
+                                    RichText::new(self.lang.plugin_meta_details(
+                                        &meta.info.vendor,
+                                        &meta.info.version,
+                                        &meta.info.category,
+                                        meta.input_channels,
+                                        meta.output_channels,
+                                    ))
+                                    .small()
+                                    .color(StudioPalette::TEXT_SECONDARY),
+                                );
+                            });
 
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                if draw_rotary_knob(
+                                    ui,
+                                    "knob_dry_wet_mix",
+                                    t.dry_wet_percent,
+                                    &mut self.mix_percent,
+                                    0.0..=100.0,
+                                    100.0,
+                                    "%",
+                                    StudioPalette::ACCENT_PURPLE,
+                                ) {
+                                    self.engine.shared.set_mix(self.mix_percent / 100.0);
+                                }
+
+                                ui.vertical(|ui| {
+                                    ui.add_space(6.0);
                                     ui.horizontal_wrapped(|ui| {
                                         if animated_led_toggle(
                                             ui,
@@ -2074,7 +2077,7 @@ impl ChronomixApp {
                                                 gui_label,
                                                 StudioPalette::ACCENT_CYAN,
                                                 win_open,
-                                                Vec2::new(165.0, 32.0),
+                                                Vec2::new(150.0, 28.0),
                                             )
                                             .clicked()
                                             {
@@ -2103,7 +2106,7 @@ impl ChronomixApp {
                                             t.unload,
                                             StudioPalette::ACCENT_CRIMSON,
                                             false,
-                                            Vec2::new(110.0, 32.0),
+                                            Vec2::new(100.0, 28.0),
                                         )
                                         .clicked()
                                         {
@@ -2113,24 +2116,6 @@ impl ChronomixApp {
                                         }
                                     });
                                 });
-
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if draw_rotary_knob(
-                                            ui,
-                                            "knob_dry_wet_mix",
-                                            t.dry_wet_percent,
-                                            &mut self.mix_percent,
-                                            0.0..=100.0,
-                                            100.0,
-                                            "%",
-                                            StudioPalette::ACCENT_PURPLE,
-                                        ) {
-                                            self.engine.shared.set_mix(self.mix_percent / 100.0);
-                                        }
-                                    },
-                                );
                             });
                         });
 
@@ -2138,18 +2123,19 @@ impl ChronomixApp {
                         return;
                     }
 
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
                         icon_heading(
                             ui,
                             StudioIcon::Sliders,
                             StudioPalette::ACCENT_CYAN,
                             &format!("{} ({})", t.parameters, meta.parameters.len()),
-                            14.5,
+                            14.0,
                         );
+                        let filter_w = (ui.available_width() - 16.0).clamp(110.0, 220.0);
                         ui.add(
                             egui::TextEdit::singleline(&mut self.param_filter)
-                                .desired_width(220.0)
+                                .desired_width(filter_w)
                                 .hint_text(t.filter_params_hint),
                         );
                     });
@@ -2167,50 +2153,77 @@ impl ChronomixApp {
                         })
                         .collect();
 
+                    let render_param_box = |ui: &mut egui::Ui,
+                                            name: &str,
+                                            formatted: &str,
+                                            param_id: u32,
+                                            param_val: f64,
+                                            is_read_only: bool,
+                                            changed: &mut Option<(u32, f64)>| {
+                        egui::Frame::new()
+                            .fill(StudioPalette::BG_INPUT)
+                            .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
+                            .corner_radius(CornerRadius::same(2))
+                            .inner_margin(Margin::symmetric(8, 5))
+                            .show(ui, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(name)
+                                                .small()
+                                                .strong()
+                                                .color(StudioPalette::TEXT_PRIMARY),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.label(
+                                        RichText::new(formatted)
+                                            .small()
+                                            .monospace()
+                                            .color(StudioPalette::ACCENT_CYAN),
+                                    );
+                                });
+                                let mut val = param_val;
+                                let enabled = !is_read_only;
+                                let slider =
+                                    egui::Slider::new(&mut val, 0.0..=1.0).show_value(false);
+                                if ui.add_enabled(enabled, slider).changed() {
+                                    *changed = Some((param_id, val));
+                                }
+                            });
+                        ui.add_space(4.0);
+                    };
+
                     egui::ScrollArea::vertical()
                         .max_height((ui.available_height() - 10.0).max(140.0))
                         .show(ui, |ui| {
-                            ui.columns(2, |cols| {
-                                for (idx, entry) in filtered_params.iter().enumerate() {
-                                    let col_ui = &mut cols[idx % 2];
-                                    egui::Frame::new()
-                                        .fill(StudioPalette::BG_INPUT)
-                                        .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
-                                        .corner_radius(CornerRadius::same(8))
-                                        .inner_margin(Margin::symmetric(10, 6))
-                                        .show(col_ui, |ui| {
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    RichText::new(&entry.param.name)
-                                                        .small()
-                                                        .strong()
-                                                        .color(StudioPalette::TEXT_PRIMARY),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        ui.label(
-                                                            RichText::new(&entry.formatted)
-                                                                .small()
-                                                                .monospace()
-                                                                .color(StudioPalette::ACCENT_CYAN),
-                                                        );
-                                                    },
-                                                );
-                                            });
-                                            let mut val = entry.param.value;
-                                            let enabled = !entry.param.is_read_only;
-                                            let slider = egui::Slider::new(&mut val, 0.0..=1.0)
-                                                .show_value(false);
-                                            if ui.add_enabled(enabled, slider).changed() {
-                                                changed_param = Some((entry.param.id, val));
-                                            }
-                                        });
-                                    col_ui.add_space(4.0);
+                            if ui.available_width() >= 620.0 {
+                                ui.columns(2, |cols| {
+                                    for (idx, entry) in filtered_params.iter().enumerate() {
+                                        render_param_box(
+                                            &mut cols[idx % 2],
+                                            &entry.param.name,
+                                            &entry.formatted,
+                                            entry.param.id,
+                                            entry.param.value,
+                                            entry.param.is_read_only,
+                                            &mut changed_param,
+                                        );
+                                    }
+                                });
+                            } else {
+                                for entry in &filtered_params {
+                                    render_param_box(
+                                        ui,
+                                        &entry.param.name,
+                                        &entry.formatted,
+                                        entry.param.id,
+                                        entry.param.value,
+                                        entry.param.is_read_only,
+                                        &mut changed_param,
+                                    );
                                 }
-                            });
+                            }
                         });
 
                     if let Some((id, val)) = changed_param {
@@ -2218,20 +2231,20 @@ impl ChronomixApp {
                         self.loaded_plugin = self.engine.loaded_plugin().cloned();
                     }
                 } else {
-                    // Intuitive Empty Rack Dropzone + Quick Plugin Chips
+                    // Empty Rack Dropzone + Quick Plugin Chips
                     egui::Frame::new()
                         .fill(StudioPalette::BG_INPUT)
                         .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_BRIGHT))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(Margin::same(16))
+                        .corner_radius(CornerRadius::same(2))
+                        .inner_margin(Margin::same(14))
                         .show(ui, |ui| {
                             ui.vertical_centered(|ui| {
                                 let (r, _) =
-                                    ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
+                                    ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
                                 draw_vector_icon(
                                     ui.painter(),
                                     r.center(),
-                                    22.0,
+                                    20.0,
                                     StudioIcon::Sliders,
                                     StudioPalette::ACCENT_PURPLE,
                                 );
@@ -2246,9 +2259,9 @@ impl ChronomixApp {
                             });
 
                             if !self.discovered_plugins.is_empty() {
-                                ui.add_space(10.0);
+                                ui.add_space(8.0);
                                 ui.separator();
-                                ui.add_space(6.0);
+                                ui.add_space(4.0);
                                 ui.label(
                                     RichText::new(format!(
                                         "{} ({})",
@@ -2273,7 +2286,7 @@ impl ChronomixApp {
                                             &format!("{} [{}]", p.name, p.category),
                                             StudioPalette::BG_ELEVATED,
                                             false,
-                                            Vec2::new(135.0, 28.0),
+                                            Vec2::new(125.0, 26.0),
                                         )
                                         .clicked()
                                         {
@@ -2305,17 +2318,17 @@ fn draw_signal_node(
             1.0_f32,
             lerp_color(StudioPalette::BORDER_SUBTLE, accent, 0.55),
         ))
-        .corner_radius(CornerRadius::same(9))
-        .inner_margin(Margin::symmetric(10, 6))
+        .corner_radius(CornerRadius::same(2))
+        .inner_margin(Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (ic_rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
-                draw_vector_icon(ui.painter(), ic_rect.center(), 15.0, icon, accent);
+                let (ic_rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                draw_vector_icon(ui.painter(), ic_rect.center(), 14.0, icon, accent);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.label(RichText::new(title).size(10.0).strong().color(accent));
-                    let short = if subtitle.chars().count() > 26 {
-                        let s: String = subtitle.chars().take(24).collect();
+                    let short = if subtitle.chars().count() > 22 {
+                        let s: String = subtitle.chars().take(20).collect();
                         format!("{s}...")
                     } else {
                         subtitle.to_string()
@@ -2341,11 +2354,10 @@ impl eframe::App for ChronomixApp {
         self.engine.service_plugin_window();
         self.update_meters();
 
-        // Keep studio animations, meters, and native plugin GUI smooth at 60 FPS.
+        // Keep meters and native plugin GUI smooth at 60 FPS only when active.
         if self.engine.is_audio_running()
             || self.engine.is_plugin_window_open()
             || self.is_scanning
-            || self.active_panel == ActivePanel::News
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

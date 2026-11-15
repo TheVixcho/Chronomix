@@ -5,18 +5,18 @@ use eframe::egui::{
     Shape, Stroke, StrokeKind, Ui, Vec2, epaint::Shadow,
 };
 
-/// Studio dark color palette with a crisp, squared industrial DAW aesthetic.
+/// Studio dark color palette inspired by modern pro-audio DAWs.
 pub struct StudioPalette;
 
 impl StudioPalette {
-    pub const BG_DEEP: Color32 = Color32::from_rgb(13, 15, 20);
-    pub const BG_PANEL: Color32 = Color32::from_rgb(18, 21, 28);
-    pub const BG_CARD: Color32 = Color32::from_rgb(22, 26, 35);
-    pub const BG_ELEVATED: Color32 = Color32::from_rgb(30, 35, 47);
-    pub const BG_INPUT: Color32 = Color32::from_rgb(15, 17, 23);
+    pub const BG_DEEP: Color32 = Color32::from_rgb(12, 14, 20);
+    pub const BG_PANEL: Color32 = Color32::from_rgb(17, 20, 28);
+    pub const BG_CARD: Color32 = Color32::from_rgb(23, 27, 38);
+    pub const BG_ELEVATED: Color32 = Color32::from_rgb(31, 37, 52);
+    pub const BG_INPUT: Color32 = Color32::from_rgb(15, 18, 25);
 
-    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(44, 51, 68);
-    pub const BORDER_BRIGHT: Color32 = Color32::from_rgb(70, 82, 110);
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(42, 49, 68);
+    pub const BORDER_BRIGHT: Color32 = Color32::from_rgb(68, 82, 114);
 
     pub const ACCENT_CYAN: Color32 = Color32::from_rgb(14, 165, 233);
     pub const ACCENT_BLUE: Color32 = Color32::from_rgb(59, 130, 246);
@@ -59,7 +59,7 @@ pub fn draw_vector_icon(
     color: Color32,
 ) {
     let r = size * 0.5;
-    let stroke = Stroke::new(1.5_f32, color);
+    let stroke = Stroke::new(1.6_f32, color);
 
     match icon {
         StudioIcon::Sparkle => {
@@ -80,7 +80,7 @@ pub fn draw_vector_icon(
                 Pos2::new(center.x, center.y - r * 0.22),
                 Vec2::new(r * 0.72, r * 1.05),
             );
-            painter.rect_stroke(cap, CornerRadius::same(2), stroke, StrokeKind::Inside);
+            painter.rect_stroke(cap, CornerRadius::same(3), stroke, StrokeKind::Inside);
             draw_arc(
                 painter,
                 Pos2::new(center.x, center.y - r * 0.05),
@@ -111,7 +111,7 @@ pub fn draw_vector_icon(
                 r * 0.78,
                 PI,
                 PI * 2.0,
-                Stroke::new(1.7_f32, color),
+                Stroke::new(1.8_f32, color),
             );
             let left_cup = Rect::from_center_size(
                 Pos2::new(center.x - r * 0.68, center.y + r * 0.32),
@@ -121,8 +121,8 @@ pub fn draw_vector_icon(
                 Pos2::new(center.x + r * 0.68, center.y + r * 0.32),
                 Vec2::new(r * 0.42, r * 0.72),
             );
-            painter.rect_filled(left_cup, CornerRadius::same(1), color);
-            painter.rect_filled(right_cup, CornerRadius::same(1), color);
+            painter.rect_filled(left_cup, CornerRadius::same(2), color);
+            painter.rect_filled(right_cup, CornerRadius::same(2), color);
         }
         StudioIcon::Sliders => {
             for (idx, knob_pos) in [(-0.58_f32, -0.25_f32), (0.0, 0.30), (0.58, -0.10)] {
@@ -133,7 +133,7 @@ pub fn draw_vector_icon(
                 );
                 let ky = center.y + knob_pos * r;
                 let krect = Rect::from_center_size(Pos2::new(x, ky), Vec2::new(r * 0.42, r * 0.32));
-                painter.rect_filled(krect, CornerRadius::ZERO, color);
+                painter.rect_filled(krect, CornerRadius::same(1), color);
             }
         }
         StudioIcon::Gear => {
@@ -159,12 +159,12 @@ pub fn draw_vector_icon(
                 Pos2::new(center.x - r * 0.88, center.y - r * 0.72),
                 Pos2::new(center.x - r * 0.10, center.y - r * 0.35),
             );
-            painter.rect_filled(tab, CornerRadius::same(1), color);
-            painter.rect_stroke(body, CornerRadius::same(1), stroke, StrokeKind::Inside);
+            painter.rect_filled(tab, CornerRadius::same(2), color);
+            painter.rect_stroke(body, CornerRadius::same(2), stroke, StrokeKind::Inside);
         }
         StudioIcon::File => {
             let body = Rect::from_center_size(center, Vec2::new(r * 1.25, r * 1.6));
-            painter.rect_stroke(body, CornerRadius::same(1), stroke, StrokeKind::Inside);
+            painter.rect_stroke(body, CornerRadius::same(2), stroke, StrokeKind::Inside);
             painter.line_segment(
                 [
                     Pos2::new(body.left() + 3.0, center.y - 2.0),
@@ -190,7 +190,7 @@ pub fn draw_vector_icon(
         }
         StudioIcon::Stop => {
             let sq = Rect::from_center_size(center, Vec2::splat(r * 1.15));
-            painter.rect_filled(sq, CornerRadius::same(1), color);
+            painter.rect_filled(sq, CornerRadius::same(2), color);
         }
         StudioIcon::Record => {
             painter.circle_filled(center, r * 0.62, color);
@@ -199,12 +199,18 @@ pub fn draw_vector_icon(
         StudioIcon::Refresh => {
             draw_arc(painter, center, r * 0.72, 0.4, PI * 1.75, stroke);
             let tip = center + Vec2::new((PI * 1.75).cos(), (PI * 1.75).sin()) * (r * 0.72);
-            painter.line_segment([tip, Pos2::new(tip.x - 3.5, tip.y - 1.5)], stroke);
-            painter.line_segment([tip, Pos2::new(tip.x + 1.0, tip.y - 4.0)], stroke);
+            painter.line_segment(
+                [tip, Pos2::new(tip.x - 3.5, tip.y - 1.5)],
+                stroke,
+            );
+            painter.line_segment(
+                [tip, Pos2::new(tip.x + 1.0, tip.y - 4.0)],
+                stroke,
+            );
         }
         StudioIcon::Window => {
             let wrect = Rect::from_center_size(center, Vec2::new(r * 1.65, r * 1.35));
-            painter.rect_stroke(wrect, CornerRadius::same(1), stroke, StrokeKind::Inside);
+            painter.rect_stroke(wrect, CornerRadius::same(2), stroke, StrokeKind::Inside);
             let top_y = wrect.top() + r * 0.42;
             painter.line_segment(
                 [Pos2::new(wrect.left(), top_y), Pos2::new(wrect.right(), top_y)],
@@ -247,16 +253,16 @@ pub fn draw_vector_icon(
     }
 }
 
-/// Applies the squared studio dark theme to `egui::Context`.
+/// Applies the studio dark theme, squared industrial DAW geometry, and compact spacing to `egui::Context`.
 pub fn apply_studio_theme(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
 
     style.spacing.item_spacing = Vec2::new(8.0, 6.0);
     style.spacing.window_margin = Margin::same(10);
-    style.spacing.button_padding = Vec2::new(10.0, 6.0);
+    style.spacing.button_padding = Vec2::new(10.0, 5.0);
     style.spacing.interact_size = Vec2::new(36.0, 26.0);
-    style.spacing.slider_width = 140.0;
-    style.spacing.combo_width = 160.0;
+    style.spacing.slider_width = 130.0;
+    style.spacing.combo_width = 140.0;
     style.animation_time = 0.14;
 
     let mut visuals = egui::Visuals::dark();
@@ -268,7 +274,6 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.code_bg_color = StudioPalette::BG_INPUT;
     visuals.override_text_color = Some(StudioPalette::TEXT_PRIMARY);
 
-    // Crisp squared corners (2px) for industrial DAW look
     let rounding = CornerRadius::same(2);
     visuals.window_corner_radius = CornerRadius::same(3);
     visuals.menu_corner_radius = CornerRadius::same(2);
@@ -285,28 +290,29 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, StudioPalette::TEXT_PRIMARY);
     visuals.widgets.inactive.corner_radius = rounding;
 
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(40, 48, 66);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 48, 66);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.2_f32, Color32::WHITE);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(43, 52, 74);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(43, 52, 74);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
     visuals.widgets.hovered.corner_radius = rounding;
     visuals.widgets.hovered.expansion = 0.0;
 
     visuals.widgets.active.bg_fill = StudioPalette::ACCENT_BLUE;
     visuals.widgets.active.weak_bg_fill = StudioPalette::ACCENT_BLUE;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
+    visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, Color32::WHITE);
     visuals.widgets.active.corner_radius = rounding;
     visuals.widgets.active.expansion = 0.0;
 
     visuals.widgets.open.bg_fill = StudioPalette::BG_ELEVATED;
     visuals.widgets.open.weak_bg_fill = StudioPalette::BG_ELEVATED;
-    visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN);
+    visuals.widgets.open.bg_stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.open.corner_radius = rounding;
+    visuals.widgets.open.expansion = 0.0;
 
-    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(14, 165, 233, 70);
-    visuals.selection.stroke = Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN);
+    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(14, 165, 233, 75);
+    visuals.selection.stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
 
     visuals.popup_shadow = Shadow {
         offset: [0, 3],
@@ -331,7 +337,7 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-/// Renders a squared studio module container with 1px technical border.
+/// Renders a studio card container with squared corners and subtle border.
 pub fn studio_card<R>(
     ui: &mut Ui,
     accent: Option<Color32>,
@@ -339,7 +345,7 @@ pub fn studio_card<R>(
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<R> {
     let stroke_color = accent
-        .map(|c| lerp_color(StudioPalette::BORDER_SUBTLE, c, 0.45))
+        .map(|c| lerp_color(StudioPalette::BORDER_SUBTLE, c, 0.42))
         .unwrap_or(StudioPalette::BORDER_SUBTLE);
 
     egui::Frame::new()
@@ -350,7 +356,7 @@ pub fn studio_card<R>(
         .show(ui, add_contents)
 }
 
-/// Renders a compact, squared button with a vector `StudioIcon` that never expands beyond its rect.
+/// Renders a squared industrial action button with a vector `StudioIcon` that never overflows adjacent widgets.
 pub fn animated_action_button(
     ui: &mut Ui,
     id_salt: &str,
@@ -366,16 +372,16 @@ pub fn animated_action_button(
         .painter()
         .layout_no_wrap(
             label.to_string(),
-            FontId::proportional(13.0),
+            FontId::proportional(12.5),
             Color32::WHITE,
         )
         .size()
         .x;
+    let avail_w = ui.available_width().max(40.0);
     let natural_w = text_w + icon_pad + 20.0;
-    let avail_w = ui.available_width().max(48.0);
     let desired = Vec2::new(
-        natural_w.max(min_size.x.min(natural_w + 12.0)).min(avail_w),
-        min_size.y.clamp(26.0, 32.0),
+        natural_w.max(min_size.x.min(natural_w + 10.0)).min(avail_w),
+        min_size.y.max(28.0),
     );
     let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
     if ui.is_rect_visible(rect) {
@@ -395,8 +401,8 @@ pub fn animated_action_button(
         painter.rect_filled(rect, CornerRadius::same(2), bg);
         let stroke_col = lerp_color(
             Color32::from_white_alpha(40),
-            Color32::from_white_alpha(170),
-            hover_t.max(active_t * 0.7),
+            Color32::from_white_alpha(165),
+            hover_t.max(active_t * 0.6),
         );
         painter.rect_stroke(
             rect,
@@ -405,29 +411,30 @@ pub fn animated_action_button(
             StrokeKind::Inside,
         );
 
+        let clip_painter = painter.with_clip_rect(rect.shrink(2.0));
         if let Some(ic) = icon {
-            let total_w = (12.0 + 6.0 + text_w).min(rect.width() - 8.0);
-            let start_x = rect.center().x - total_w * 0.5;
+            let total_w = 13.0 + 6.0 + text_w;
+            let start_x = (rect.center().x - total_w * 0.5).max(rect.left() + 6.0);
             draw_vector_icon(
-                painter,
-                Pos2::new(start_x + 6.0, rect.center().y),
-                12.0,
+                &clip_painter,
+                Pos2::new(start_x + 6.5, rect.center().y),
+                12.5,
                 ic,
                 Color32::WHITE,
             );
-            painter.text(
-                Pos2::new(start_x + 18.0, rect.center().y),
+            clip_painter.text(
+                Pos2::new(start_x + 19.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 label,
-                FontId::proportional(13.0),
+                FontId::proportional(12.5),
                 Color32::WHITE,
             );
         } else {
-            painter.text(
+            clip_painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
                 label,
-                FontId::proportional(13.0),
+                FontId::proportional(12.5),
                 Color32::WHITE,
             );
         }
@@ -438,7 +445,7 @@ pub fn animated_action_button(
     resp
 }
 
-/// Compact hardware-style rotary knob with animated arc, tick marks, drag & double-click reset.
+/// Interactive hardware-style rotary knob with animated arc, tick marks, drag & double-click reset.
 pub fn draw_rotary_knob(
     ui: &mut Ui,
     id_salt: &str,
@@ -456,8 +463,7 @@ pub fn draw_rotary_knob(
     let span = (max - min).max(1e-5);
 
     ui.vertical_centered(|ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        let knob_size = Vec2::new(62.0, 62.0);
+        let knob_size = Vec2::new(66.0, 66.0);
         let (rect, resp) = ui.allocate_exact_size(knob_size, Sense::click_and_drag());
 
         if resp.double_clicked() {
@@ -485,12 +491,13 @@ pub fn draw_rotary_knob(
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let center = rect.center();
-            let outer_r = 22.0;
+            let outer_r = 23.0;
             let track_r = outer_r + 4.5;
 
-            let start_angle = PI * 0.75;
-            let total_sweep = PI * 1.5;
+            let start_angle = PI * 0.75; // 135 deg (bottom-left)
+            let total_sweep = PI * 1.5; // 270 deg sweep
 
+            // Subtle outer ticks
             for i in 0..=10 {
                 let tick_t = i as f32 / 10.0;
                 let ang = start_angle + tick_t * total_sweep;
@@ -505,15 +512,17 @@ pub fn draw_rotary_knob(
                 painter.line_segment([p1, p2], Stroke::new(1.2_f32, tick_col));
             }
 
+            // Background arc
             draw_arc(
                 painter,
                 center,
                 track_r,
                 start_angle,
                 start_angle + total_sweep,
-                Stroke::new(2.8_f32, Color32::from_rgb(33, 39, 54)),
+                Stroke::new(3.0_f32, Color32::from_rgb(33, 39, 54)),
             );
 
+            // Active value arc
             if anim_norm > 0.005 {
                 let end_angle = start_angle + anim_norm * total_sweep;
                 draw_arc(
@@ -522,16 +531,17 @@ pub fn draw_rotary_knob(
                     track_r,
                     start_angle,
                     end_angle,
-                    Stroke::new(3.0_f32, accent),
+                    Stroke::new(3.2_f32, accent),
                 );
             }
 
+            // Knob cap
             painter.circle_filled(
                 center,
                 outer_r,
                 lerp_color(
-                    Color32::from_rgb(26, 30, 42),
-                    Color32::from_rgb(36, 42, 58),
+                    Color32::from_rgb(28, 33, 46),
+                    Color32::from_rgb(38, 45, 62),
                     hover_t,
                 ),
             );
@@ -544,13 +554,16 @@ pub fn draw_rotary_knob(
                 ),
             );
 
+            // Indicator needle
             let val_angle = start_angle + anim_norm * total_sweep;
             let dir = Vec2::new(val_angle.cos(), val_angle.sin());
-            let p_inner = center + dir * (outer_r * 0.32);
+            let p_inner = center + dir * (outer_r * 0.35);
             let p_outer = center + dir * (outer_r * 0.82);
-            painter.line_segment([p_inner, p_outer], Stroke::new(2.0_f32, Color32::WHITE));
+            painter.line_segment([p_inner, p_outer], Stroke::new(2.2_f32, Color32::WHITE));
+            painter.circle_filled(p_outer, 1.8, accent);
         }
 
+        // Value badge + label
         let formatted = if unit_suffix == "%" {
             format!("{:.0}%", *value)
         } else {
@@ -596,7 +609,7 @@ pub fn draw_arc(
     painter.add(Shape::line(points, stroke));
 }
 
-/// Responsive segmented stereo LED VU meter that adapts segment count to available width.
+/// Studio segmented stereo LED VU meter with peak hold and dB markings that scales to narrow widths.
 pub fn draw_studio_vu_meter(
     ui: &mut Ui,
     label: &str,
@@ -609,9 +622,10 @@ pub fn draw_studio_vu_meter(
         ui.spacing_mut().item_spacing.y = 4.0;
         for (ch, amp, peak) in [("L", left_amp, left_peak), ("R", right_amp, right_peak)] {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                let total_w = ui.available_width();
+                let label_w = if total_w < 220.0 { 36.0 } else { 44.0 };
                 ui.add_sized(
-                    [38.0, 14.0],
+                    [label_w, 14.0],
                     egui::Label::new(
                         RichText::new(format!("{label} {ch}"))
                             .small()
@@ -622,32 +636,35 @@ pub fn draw_studio_vu_meter(
                     .truncate(),
                 );
 
-                let show_db = ui.available_width() > 120.0;
-                let db_reserve = if show_db { 52.0 } else { 0.0 };
-                let bar_w = (ui.available_width() - db_reserve).max(40.0);
-                let segments = ((bar_w / 7.5).floor() as usize).clamp(8, 28);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(bar_w, 12.0), Sense::hover());
+                let show_db = ui.available_width() > 130.0;
+                let avail_w = if show_db {
+                    (ui.available_width() - 56.0).max(40.0)
+                } else {
+                    (ui.available_width() - 4.0).max(32.0)
+                };
+                let segments = ((avail_w / 7.5).floor() as usize).clamp(8, 28);
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(avail_w, 13.0), Sense::hover());
 
                 if ui.is_rect_visible(rect) {
                     let painter = ui.painter();
-                    painter.rect_filled(rect, CornerRadius::same(1), StudioPalette::BG_INPUT);
+                    painter.rect_filled(rect, CornerRadius::same(2), StudioPalette::BG_INPUT);
                     painter.rect_stroke(
                         rect,
-                        CornerRadius::same(1),
+                        CornerRadius::same(2),
                         Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE),
                         StrokeKind::Inside,
                     );
 
-                    let inner = rect.shrink2(Vec2::new(2.0, 2.0));
+                    let inner = rect.shrink2(Vec2::new(3.0, 2.5));
                     let norm = amp_to_meter_norm(amp);
                     let peak_norm = amp_to_meter_norm(peak);
                     let peak_seg = ((peak_norm * segments as f32).round() as usize)
                         .saturating_sub(1)
                         .min(segments - 1);
 
-                    let gap = 1.5_f32;
+                    let gap = 1.6_f32;
                     let seg_w =
-                        ((inner.width() - gap * (segments as f32 - 1.0)) / segments as f32).max(1.0);
+                        ((inner.width() - gap * (segments as f32 - 1.0)) / segments as f32).max(1.5);
 
                     for i in 0..segments {
                         let seg_t = (i + 1) as f32 / segments as f32;
@@ -683,7 +700,7 @@ pub fn draw_studio_vu_meter(
                             )
                         };
 
-                        painter.rect_filled(seg_rect, CornerRadius::ZERO, col);
+                        painter.rect_filled(seg_rect, CornerRadius::same(1), col);
                     }
                 }
 
@@ -694,7 +711,7 @@ pub fn draw_studio_vu_meter(
                         format!("{:+.1} dB", (20.0 * amp.log10()).max(-60.0))
                     };
                     ui.add_sized(
-                        [46.0, 14.0],
+                        [50.0, 14.0],
                         egui::Label::new(
                             RichText::new(db_str)
                                 .small()
@@ -704,8 +721,7 @@ pub fn draw_studio_vu_meter(
                                 } else {
                                     StudioPalette::TEXT_MUTED
                                 }),
-                        )
-                        .truncate(),
+                        ),
                     );
                 }
             });
@@ -735,10 +751,8 @@ pub fn animated_led_toggle(
         FontId::proportional(12.5),
         StudioPalette::TEXT_PRIMARY,
     );
-    let desired = Vec2::new(
-        (text_galley.size().x + 42.0).min(ui.available_width().max(64.0)),
-        28.0,
-    );
+    let avail_w = ui.available_width().max(60.0);
+    let desired = Vec2::new((text_galley.size().x + 44.0).min(avail_w), 28.0);
     let (rect, resp) = ui.allocate_exact_size(desired, Sense::click());
     let mut changed = false;
     if resp.clicked() {
@@ -782,19 +796,20 @@ pub fn animated_led_toggle(
         // Squared switch track
         let sw_rect = Rect::from_min_size(
             Pos2::new(rect.left() + 7.0, rect.center().y - 6.0),
-            Vec2::new(22.0, 12.0),
+            Vec2::new(24.0, 12.0),
         );
         let track_col = lerp_color(Color32::from_rgb(18, 22, 32), active_color, t);
         painter.rect_filled(sw_rect, CornerRadius::same(2), track_col);
 
-        let knob_x = sw_rect.left() + 5.0 + t * 12.0;
-        let knob_rect = Rect::from_center_size(
-            Pos2::new(knob_x, sw_rect.center().y),
-            Vec2::new(7.0, 8.0),
+        let knob_x = sw_rect.left() + 2.0 + t * 11.0;
+        let thumb_rect = Rect::from_min_size(
+            Pos2::new(knob_x, sw_rect.top() + 2.0),
+            Vec2::new(9.0, 8.0),
         );
-        painter.rect_filled(knob_rect, CornerRadius::same(1), Color32::WHITE);
+        painter.rect_filled(thumb_rect, CornerRadius::same(1), Color32::WHITE);
 
-        painter.text(
+        let clip_painter = painter.with_clip_rect(rect.shrink(2.0));
+        clip_painter.text(
             Pos2::new(sw_rect.right() + 7.0, rect.center().y),
             Align2::LEFT_CENTER,
             label,
@@ -809,21 +824,22 @@ pub fn animated_led_toggle(
 /// Draws a section heading with a painted vector icon so no emoji fonts are needed.
 pub fn icon_heading(ui: &mut Ui, icon: StudioIcon, color: Color32, text: &str, size: f32) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(size + 2.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(size + 4.0), Sense::hover());
         if ui.is_rect_visible(rect) {
-            draw_vector_icon(ui.painter(), rect.center(), size - 1.0, icon, color);
+            draw_vector_icon(ui.painter(), rect.center(), size, icon, color);
         }
-        ui.add(
-            egui::Label::new(RichText::new(text).size(size).strong().color(Color32::WHITE))
-                .truncate(),
-        );
+        ui.label(RichText::new(text).size(size).strong().color(Color32::WHITE));
     });
 }
 
-/// Draws a compact signal connector arrow between signal-chain nodes.
-pub fn draw_animated_signal_pipe(ui: &mut Ui, active: bool, time: f64, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(22.0, 36.0), Sense::hover());
+/// Draws an animated signal connector with flowing particles when `active` is true.
+pub fn draw_animated_signal_pipe(
+    ui: &mut Ui,
+    active: bool,
+    time: f64,
+    color: Color32,
+) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(34.0, 44.0), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -833,43 +849,29 @@ pub fn draw_animated_signal_pipe(ui: &mut Ui, active: bool, time: f64, color: Co
     let p2 = Pos2::new(rect.right() - 2.0, y);
 
     let base_col = if active {
-        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 120)
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 100)
     } else {
         StudioPalette::BORDER_SUBTLE
     };
-    painter.line_segment([p1, p2], Stroke::new(1.8_f32, base_col));
+    painter.line_segment([p1, p2], Stroke::new(2.0_f32, base_col));
 
+    // Arrowhead
     let tip = p2;
     painter.line_segment(
-        [tip, Pos2::new(tip.x - 4.5, tip.y - 3.5)],
-        Stroke::new(
-            1.8_f32,
-            if active {
-                color
-            } else {
-                StudioPalette::BORDER_SUBTLE
-            },
-        ),
+        [tip, Pos2::new(tip.x - 5.0, tip.y - 4.0)],
+        Stroke::new(2.0_f32, if active { color } else { StudioPalette::BORDER_SUBTLE }),
     );
     painter.line_segment(
-        [tip, Pos2::new(tip.x - 4.5, tip.y + 3.5)],
-        Stroke::new(
-            1.8_f32,
-            if active {
-                color
-            } else {
-                StudioPalette::BORDER_SUBTLE
-            },
-        ),
+        [tip, Pos2::new(tip.x - 5.0, tip.y + 4.0)],
+        Stroke::new(2.0_f32, if active { color } else { StudioPalette::BORDER_SUBTLE }),
     );
 
     if active {
-        let phase = ((time * 1.4).fract()) as f32;
-        let x = p1.x + phase * (p2.x - p1.x);
-        painter.rect_filled(
-            Rect::from_center_size(Pos2::new(x, y), Vec2::splat(4.0)),
-            CornerRadius::ZERO,
-            color,
-        );
+        for offset in [0.0_f64, 0.5_f64] {
+            let phase = ((time * 1.4 + offset).fract()) as f32;
+            let x = p1.x + phase * (p2.x - p1.x);
+            painter.circle_filled(Pos2::new(x, y), 3.2, color);
+            painter.circle_filled(Pos2::new(x, y), 1.6, Color32::WHITE);
+        }
     }
 }
