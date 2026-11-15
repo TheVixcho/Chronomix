@@ -462,8 +462,11 @@ pub fn draw_rotary_knob(
     let max = *range.end();
     let span = (max - min).max(1e-5);
 
-    ui.vertical_centered(|ui| {
-        let knob_size = Vec2::new(66.0, 66.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(72.0, 96.0),
+        egui::Layout::top_down(egui::Align::Center),
+        |ui| {
+            let knob_size = Vec2::new(66.0, 66.0);
         let (rect, resp) = ui.allocate_exact_size(knob_size, Sense::click_and_drag());
 
         if resp.double_clicked() {

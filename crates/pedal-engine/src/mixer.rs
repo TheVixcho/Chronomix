@@ -1,9 +1,9 @@
 use std::{
     f32::consts::{PI, SQRT_2},
     fs::{self, File},
-    io::BufWriter,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -31,7 +31,45 @@ use crate::{
 
 pub const MAX_MIXER_CHANNELS: usize = 48;
 pub const MAX_MIXER_INSERTS: usize = 4;
-pub const DEFAULT_MIXER_CHANNELS: usize = 8;
+pub const DEFAULT_MIXER_CHANNELS: usize = 2;
+pub const VIRTUAL_MIC_SINK_NAME: &str = "chronomix_virtual_sink";
+pub const VIRTUAL_MIC_SOURCE_NAME: &str = "chronomix_virtual_mic";
+pub const VIRTUAL_MIC_DISPLAY_NAME: &str = "Chronomix Virtual Mic (Discord/OBS)";
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ChannelIcon {
+    #[default]
+    None,
+    Vocals,
+    Guitar,
+    Bass,
+    Drums,
+    Keys,
+    Media,
+    Strings,
+    Brass,
+    Broadcast,
+    Sfx,
+    CustomImage(PathBuf),
+}
+
+impl ChannelIcon {
+    pub fn presets() -> &'static [ChannelIcon] {
+        &[
+            ChannelIcon::None,
+            ChannelIcon::Vocals,
+            ChannelIcon::Guitar,
+            ChannelIcon::Bass,
+            ChannelIcon::Drums,
+            ChannelIcon::Keys,
+            ChannelIcon::Media,
+            ChannelIcon::Strings,
+            ChannelIcon::Brass,
+            ChannelIcon::Broadcast,
+            ChannelIcon::Sfx,
+        ]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelInputMode {
@@ -69,9 +107,14 @@ pub struct EqBandConfig {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChannelDspConfig {
     pub trim_db: f32,
+    pub balance: f32,
+    pub stereo_width: f32,
     pub phase_invert: bool,
+    pub swap_lr: bool,
     pub hpf_enabled: bool,
     pub hpf_freq_hz: f32,
+    pub lpf_enabled: bool,
+    pub lpf_freq_hz: f32,
     pub gate_enabled: bool,
     pub gate_threshold_db: f32,
     pub eq_enabled: bool,
@@ -80,21 +123,29 @@ pub struct ChannelDspConfig {
     pub comp_threshold_db: f32,
     pub comp_ratio: f32,
     pub comp_makeup_db: f32,
+    pub fx_bypass: bool,
     pub fader_db: f32,
     pub pan: f32,
     pub mute: bool,
     pub solo: bool,
+    pub solo_safe: bool,
     pub record_arm: bool,
     pub pre_fader_rec: bool,
+    pub send_to_virtual_mic: bool,
 }
 
 impl Default for ChannelDspConfig {
     fn default() -> Self {
         Self {
             trim_db: 0.0,
+            balance: 0.0,
+            stereo_width: 1.0,
             phase_invert: false,
+            swap_lr: false,
             hpf_enabled: false,
             hpf_freq_hz: 80.0,
+            lpf_enabled: false,
+            lpf_freq_hz: 16000.0,
             gate_enabled: false,
             gate_threshold_db: -48.0,
             eq_enabled: true,
@@ -128,12 +179,15 @@ impl Default for ChannelDspConfig {
             comp_threshold_db: -18.0,
             comp_ratio: 3.0,
             comp_makeup_db: 0.0,
+            fx_bypass: false,
             fader_db: 0.0,
             pan: 0.0,
             mute: false,
             solo: false,
+            solo_safe: false,
             record_arm: false,
             pre_fader_rec: false,
+            send_to_virtual_mic: true,
         }
     }
 }
@@ -180,6 +234,7 @@ pub struct MixerChannelState {
     pub index: usize,
     pub name: String,
     pub color: [u8; 3],
+    pub icon: ChannelIcon,
     pub source: ChannelInputSource,
     pub dsp: ChannelDspConfig,
     pub inserts: [InsertSlotInfo; MAX_MIXER_INSERTS],
@@ -192,6 +247,8 @@ pub struct MasterBusState {
     pub mute: bool,
     pub dim: bool,
     pub record_mix: bool,
+    pub virtual_mic_enabled: bool,
+    pub virtual_mic_gain_db: f32,
     pub inserts: [InsertSlotInfo; MAX_MIXER_INSERTS],
 }
 
@@ -202,6 +259,8 @@ impl Default for MasterBusState {
             mute: false,
             dim: false,
             record_mix: false,
+            virtual_mic_enabled: false,
+            virtual_mic_gain_db: 0.0,
             inserts: std::array::from_fn(|_| InsertSlotInfo::default()),
         }
     }
@@ -229,6 +288,9 @@ pub struct MixerMeterSnapshot {
     pub channels: Vec<ChannelMeterValues>,
     pub master_left: f32,
     pub master_right: f32,
+    pub virtual_mic_left: f32,
+    pub virtual_mic_right: f32,
+    pub is_virtual_mic_active: bool,
     pub recorded_frames: u64,
     pub is_recording: bool,
 }
@@ -272,6 +334,21 @@ impl BiquadCoeffs {
             b0: ((1.0 + cos_w0) * 0.5) / a0,
             b1: -(1.0 + cos_w0) / a0,
             b2: ((1.0 + cos_w0) * 0.5) / a0,
+            a1: (-2.0 * cos_w0) / a0,
+            a2: (1.0 - alpha) / a0,
+        }
+    }
+
+    fn low_pass(freq_hz: f32, sr: f32) -> Self {
+        let f = freq_hz.clamp(100.0, (sr * 0.48).max(500.0));
+        let w0 = 2.0 * PI * f / sr.max(1000.0);
+        let cos_w0 = w0.cos();
+        let alpha = w0.sin() / (2.0 * 0.707_106_77);
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: ((1.0 - cos_w0) * 0.5) / a0,
+            b1: (1.0 - cos_w0) / a0,
+            b2: ((1.0 - cos_w0) * 0.5) / a0,
             a1: (-2.0 * cos_w0) / a0,
             a2: (1.0 - alpha) / a0,
         }
@@ -383,9 +460,21 @@ impl BiquadState {
     }
 }
 
-fn channel_band_coeffs(dsp: &ChannelDspConfig, sr: f32) -> (Option<BiquadCoeffs>, [Option<BiquadCoeffs>; 4]) {
+fn channel_band_coeffs(
+    dsp: &ChannelDspConfig,
+    sr: f32,
+) -> (
+    Option<BiquadCoeffs>,
+    Option<BiquadCoeffs>,
+    [Option<BiquadCoeffs>; 4],
+) {
     let hpf = if dsp.hpf_enabled {
         Some(BiquadCoeffs::high_pass(dsp.hpf_freq_hz, sr))
+    } else {
+        None
+    };
+    let lpf = if dsp.lpf_enabled {
+        Some(BiquadCoeffs::low_pass(dsp.lpf_freq_hz, sr))
     } else {
         None
     };
@@ -402,13 +491,16 @@ fn channel_band_coeffs(dsp: &ChannelDspConfig, sr: f32) -> (Option<BiquadCoeffs>
             });
         }
     }
-    (hpf, eq)
+    (hpf, lpf, eq)
 }
 
 pub fn eval_channel_eq_db(dsp: &ChannelDspConfig, freq_hz: f32, sample_rate: f32) -> f32 {
-    let (hpf, bands) = channel_band_coeffs(dsp, sample_rate.max(8000.0));
+    let (hpf, lpf, bands) = channel_band_coeffs(dsp, sample_rate.max(8000.0));
     let mut db = 0.0_f32;
     if let Some(c) = hpf {
+        db += c.magnitude_db(freq_hz, sample_rate);
+    }
+    if let Some(c) = lpf {
         db += c.magnitude_db(freq_hz, sample_rate);
     }
     for band_c in bands.into_iter().flatten() {
@@ -447,6 +539,9 @@ struct SharedMixerTelemetry {
     channels: [ChannelMeterAtomics; MAX_MIXER_CHANNELS],
     master_peak_l: AtomicU32,
     master_peak_r: AtomicU32,
+    virtual_mic_peak_l: AtomicU32,
+    virtual_mic_peak_r: AtomicU32,
+    virtual_mic_active: AtomicBool,
     recording_active: AtomicBool,
     recorded_frames: AtomicU64,
 }
@@ -457,6 +552,9 @@ impl Default for SharedMixerTelemetry {
             channels: std::array::from_fn(|_| ChannelMeterAtomics::default()),
             master_peak_l: AtomicU32::new(0),
             master_peak_r: AtomicU32::new(0),
+            virtual_mic_peak_l: AtomicU32::new(0),
+            virtual_mic_peak_r: AtomicU32::new(0),
+            virtual_mic_active: AtomicBool::new(false),
             recording_active: AtomicBool::new(false),
             recorded_frames: AtomicU64::new(0),
         }
@@ -571,6 +669,7 @@ struct RtChannelState {
     mode: ChannelInputMode,
     dsp: ChannelDspConfig,
     hpf_state: BiquadState,
+    lpf_state: BiquadState,
     eq_states: [BiquadState; 4],
     gate_env: f32,
     gate_gain: f32,
@@ -589,6 +688,7 @@ impl RtChannelState {
             mode: ChannelInputMode::Unassigned,
             dsp: ChannelDspConfig::default(),
             hpf_state: BiquadState::default(),
+            lpf_state: BiquadState::default(),
             eq_states: [BiquadState::default(); 4],
             gate_env: 0.0,
             gate_gain: 1.0,
@@ -668,6 +768,8 @@ enum MixerCommand {
         mix: f32,
     },
     SetRecorders(Option<Box<RecorderChannelTx>>),
+    SetVirtualMicTx(Option<Producer<f32>>),
+    SetVirtualMicGainDb(f32),
 }
 
 struct MixerDspProcessor {
@@ -680,6 +782,10 @@ struct MixerDspProcessor {
     master_dim: bool,
     master_inserts: [RtInsertSlot; MAX_MIXER_INSERTS],
     master_rec_tx: Option<Producer<f32>>,
+    virtual_mic_tx: Option<Producer<f32>>,
+    virtual_mic_gain_db: f32,
+    vmic_l: Vec<f32>,
+    vmic_r: Vec<f32>,
     vst_buffers: AudioBuffers,
     wet_l: Vec<f32>,
     wet_r: Vec<f32>,
@@ -705,6 +811,10 @@ impl MixerDspProcessor {
             master_dim: false,
             master_inserts: std::array::from_fn(|_| RtInsertSlot::default()),
             master_rec_tx: None,
+            virtual_mic_tx: None,
+            virtual_mic_gain_db: 0.0,
+            vmic_l: vec![0.0; 4096],
+            vmic_r: vec![0.0; 4096],
             vst_buffers: AudioBuffers::new(2, 2, 4096, sample_rate),
             wet_l: vec![0.0; 4096],
             wet_r: vec![0.0; 4096],
@@ -844,6 +954,12 @@ impl MixerDspProcessor {
                         self.master_rec_tx = None;
                     }
                 },
+                MixerCommand::SetVirtualMicTx(tx) => {
+                    self.virtual_mic_tx = tx;
+                }
+                MixerCommand::SetVirtualMicGainDb(gain_db) => {
+                    self.virtual_mic_gain_db = gain_db;
+                }
             }
         }
     }
@@ -876,6 +992,12 @@ impl MixerAudioProcessor for MixerDspProcessor {
         self.drain_commands();
         out_left[..frames].fill(0.0);
         out_right[..frames].fill(0.0);
+        if self.vmic_l.len() < frames {
+            self.vmic_l.resize(frames, 0.0);
+            self.vmic_r.resize(frames, 0.0);
+        }
+        self.vmic_l[..frames].fill(0.0);
+        self.vmic_r[..frames].fill(0.0);
 
         let sr = sample_rate.max(8000.0) as f32;
         let active_n = self.active_channels.min(self.channels.len());
@@ -964,10 +1086,31 @@ impl MixerAudioProcessor for MixerDspProcessor {
                 }
             }
 
+            let bal = ch.dsp.balance.clamp(-1.0, 1.0);
+            let bal_l = if bal > 0.0 { 1.0 - bal } else { 1.0 };
+            let bal_r = if bal < 0.0 { 1.0 + bal } else { 1.0 };
+            let width = ch.dsp.stereo_width.clamp(0.0, 2.0);
+            let swap_lr = ch.dsp.swap_lr;
+            if swap_lr || (bal - 0.0).abs() > 1e-4 || (width - 1.0).abs() > 1e-4 {
+                for i in 0..frames {
+                    let mut l = ch.buf_l[i];
+                    let mut r = ch.buf_r[i];
+                    if swap_lr {
+                        std::mem::swap(&mut l, &mut r);
+                    }
+                    l *= bal_l;
+                    r *= bal_r;
+                    let mid = 0.5 * (l + r);
+                    let side = 0.5 * (l - r) * width;
+                    ch.buf_l[i] = mid + side;
+                    ch.buf_r[i] = mid - side;
+                }
+            }
+
             store_peak(&m_atomics.in_peak_l, slice_peak(&ch.buf_l[..frames]));
             store_peak(&m_atomics.in_peak_r, slice_peak(&ch.buf_r[..frames]));
 
-            let (hpf_coeffs, eq_coeffs) = channel_band_coeffs(&ch.dsp, sr);
+            let (hpf_coeffs, lpf_coeffs, eq_coeffs) = channel_band_coeffs(&ch.dsp, sr);
             let gate_thresh_lin = db_to_linear(ch.dsp.gate_threshold_db);
             let comp_thresh = ch.dsp.comp_threshold_db;
             let comp_ratio = ch.dsp.comp_ratio.max(1.0);
@@ -980,6 +1123,9 @@ impl MixerAudioProcessor for MixerDspProcessor {
 
                 if let Some(c) = hpf_coeffs {
                     (l, r) = ch.hpf_state.process_stereo(c, l, r);
+                }
+                if let Some(c) = lpf_coeffs {
+                    (l, r) = ch.lpf_state.process_stereo(c, l, r);
                 }
 
                 if ch.dsp.gate_enabled {
@@ -1018,20 +1164,22 @@ impl MixerAudioProcessor for MixerDspProcessor {
             }
             store_peak(&m_atomics.comp_gr_db, max_gr_db);
 
-            for slot in &ch.inserts {
-                if !slot.bypass {
-                    if let Some(ref handle) = slot.handle {
-                        process_active_handle(
-                            handle,
-                            &mut self.vst_buffers,
-                            &mut self.wet_l,
-                            &mut self.wet_r,
-                            &mut ch.buf_l[..frames],
-                            &mut ch.buf_r[..frames],
-                            frames,
-                            sample_rate,
-                            slot.mix,
-                        );
+            if !ch.dsp.fx_bypass {
+                for slot in &ch.inserts {
+                    if !slot.bypass {
+                        if let Some(ref handle) = slot.handle {
+                            process_active_handle(
+                                handle,
+                                &mut self.vst_buffers,
+                                &mut self.wet_l,
+                                &mut self.wet_r,
+                                &mut ch.buf_l[..frames],
+                                &mut ch.buf_r[..frames],
+                                frames,
+                                sample_rate,
+                                slot.mix,
+                            );
+                        }
                     }
                 }
             }
@@ -1040,7 +1188,11 @@ impl MixerAudioProcessor for MixerDspProcessor {
             let pan_l = angle.cos() * SQRT_2;
             let pan_r = angle.sin() * SQRT_2;
             let fader_lin = if ch.dsp.mute { 0.0 } else { db_to_linear(ch.dsp.fader_db) };
-            let solo_mult = if !any_solo || ch.dsp.solo { 1.0 } else { 0.0 };
+            let solo_mult = if !any_solo || ch.dsp.solo || ch.dsp.solo_safe {
+                1.0
+            } else {
+                0.0
+            };
 
             if recording_on && ch.dsp.pre_fader_rec {
                 if let Some(ref mut tx) = ch.rec_tx {
@@ -1049,6 +1201,7 @@ impl MixerAudioProcessor for MixerDspProcessor {
                 }
             }
 
+            let send_vmic = ch.dsp.send_to_virtual_mic;
             let mut post_peak_l = 0.0_f32;
             let mut post_peak_r = 0.0_f32;
             for i in 0..frames {
@@ -1058,8 +1211,14 @@ impl MixerAudioProcessor for MixerDspProcessor {
                 ch.buf_r[i] = pr;
                 post_peak_l = post_peak_l.max(pl.abs());
                 post_peak_r = post_peak_r.max(pr.abs());
-                out_left[i] += pl * solo_mult;
-                out_right[i] += pr * solo_mult;
+                let bus_l = pl * solo_mult;
+                let bus_r = pr * solo_mult;
+                out_left[i] += bus_l;
+                out_right[i] += bus_r;
+                if send_vmic {
+                    self.vmic_l[i] += bus_l;
+                    self.vmic_r[i] += bus_r;
+                }
             }
 
             if recording_on && !ch.dsp.pre_fader_rec {
@@ -1101,6 +1260,27 @@ impl MixerAudioProcessor for MixerDspProcessor {
             out_right[i] *= master_lin;
         }
 
+        let vmic_lin = if self.master_mute {
+            0.0
+        } else {
+            db_to_linear(self.master_fader_db) * db_to_linear(self.virtual_mic_gain_db)
+        };
+        for i in 0..frames {
+            self.vmic_l[i] = (self.vmic_l[i] * vmic_lin).clamp(-1.0, 1.0);
+            self.vmic_r[i] = (self.vmic_r[i] * vmic_lin).clamp(-1.0, 1.0);
+        }
+        store_peak(
+            &self.telemetry.virtual_mic_peak_l,
+            slice_peak(&self.vmic_l[..frames]),
+        );
+        store_peak(
+            &self.telemetry.virtual_mic_peak_r,
+            slice_peak(&self.vmic_r[..frames]),
+        );
+        if let Some(ref mut vtx) = self.virtual_mic_tx {
+            let _ = push_stereo_to_ring(vtx, &self.vmic_l, &self.vmic_r, frames);
+        }
+
         if recording_on {
             if let Some(ref mut tx) = self.master_rec_tx {
                 let n = push_stereo_to_ring(tx, out_left, out_right, frames);
@@ -1129,6 +1309,34 @@ struct ActiveMixerRecording {
     report: MixerRecordingReport,
 }
 
+struct ActiveVirtualMicPipe {
+    stop_flag: Arc<AtomicBool>,
+    join_handle: Option<JoinHandle<()>>,
+    child: Arc<Mutex<Option<Child>>>,
+}
+
+impl ActiveVirtualMicPipe {
+    fn stop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(ref mut c) = *guard {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            *guard = None;
+        }
+        if let Some(jh) = self.join_handle.take() {
+            let _ = jh.join();
+        }
+    }
+}
+
+struct ActiveVirtualMic {
+    sink_module_id: Option<u32>,
+    source_module_id: Option<u32>,
+    pipe: Option<ActiveVirtualMicPipe>,
+}
+
 const DEFAULT_WING_COLORS: [[u8; 3]; 8] = [
     [236, 72, 153],
     [14, 165, 233],
@@ -1155,6 +1363,7 @@ pub struct MixerEngine {
     pending_media_loads: Arc<Mutex<Vec<(usize, PathBuf, Result<MediaBuffer, String>)>>>,
     master_backends: [Option<BackendSlot>; MAX_MIXER_INSERTS],
     recording: Option<ActiveMixerRecording>,
+    virtual_mic: Option<ActiveVirtualMic>,
     sample_rate: u32,
     block_size: usize,
     wine_config: WineConfig,
@@ -1189,6 +1398,7 @@ impl MixerEngine {
             pending_media_loads: Arc::new(Mutex::new(Vec::new())),
             master_backends: std::array::from_fn(|_| None),
             recording: None,
+            virtual_mic: None,
             sample_rate: 48_000,
             block_size: 256,
             wine_config: WineConfig::default(),
@@ -1200,6 +1410,7 @@ impl MixerEngine {
             index,
             name: format!("CH {:02}", index + 1),
             color: DEFAULT_WING_COLORS[index % DEFAULT_WING_COLORS.len()],
+            icon: ChannelIcon::None,
             source: ChannelInputSource::default(),
             dsp: ChannelDspConfig::default(),
             inserts: std::array::from_fn(|_| InsertSlotInfo::default()),
@@ -1378,6 +1589,12 @@ impl MixerEngine {
         }
     }
 
+    pub fn set_channel_icon(&mut self, ch: usize, icon: ChannelIcon) {
+        if let Some(c) = self.channels.get_mut(ch) {
+            c.icon = icon;
+        }
+    }
+
     pub fn set_channel_dsp(&mut self, ch: usize, dsp: ChannelDspConfig) {
         if let Some(c) = self.channels.get_mut(ch) {
             c.dsp = dsp;
@@ -1411,6 +1628,18 @@ impl MixerEngine {
         }
     }
 
+    pub fn set_virtual_mic_gain_db(&mut self, gain_db: f32) {
+        let clamped = gain_db.clamp(-24.0, 18.0);
+        self.master.virtual_mic_gain_db = clamped;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::SetVirtualMicGainDb(clamped));
+        }
+    }
+
+    pub fn is_virtual_mic_active(&self) -> bool {
+        self.virtual_mic.is_some() && self.master.virtual_mic_enabled
+    }
+
     pub fn set_channel_multimedia(&mut self, ch: usize) {
         if ch >= self.channels.len() {
             return;
@@ -1418,6 +1647,9 @@ impl MixerEngine {
         let default_audio_name = format!("CH {:02}", ch + 1);
         if self.channels[ch].name == default_audio_name {
             self.channels[ch].name = format!("MEDIA {:02}", ch + 1);
+        }
+        if self.channels[ch].icon == ChannelIcon::None {
+            self.channels[ch].icon = ChannelIcon::Media;
         }
         self.channels[ch].source = ChannelInputSource {
             device_id: None,
@@ -1664,6 +1896,27 @@ impl MixerEngine {
         Ok(())
     }
 
+    pub fn seek_media_relative_seconds(
+        &mut self,
+        ch: usize,
+        delta_secs: f64,
+        fallback_output_device: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let Some(c) = self.channels.get(ch) else {
+            return Ok(());
+        };
+        if c.media.total_frames == 0 {
+            return Ok(());
+        }
+        let sr = c.media.sample_rate.max(1) as f64;
+        let cur = c.media.current_frame as f64;
+        let max_f = c.media.total_frames as f64;
+        let target = (cur + delta_secs * sr).round().clamp(0.0, max_f) as usize;
+        let playing = c.media.playing;
+        let looping = c.media.looping;
+        self.set_media_transport(ch, playing, looping, Some(target), fallback_output_device)
+    }
+
     pub fn unload_channel_media(&mut self, ch: usize) {
         if ch >= self.channels.len() {
             return;
@@ -1748,7 +2001,7 @@ impl MixerEngine {
         preferred_sample_rate: u32,
         block_size: usize,
     ) -> Result<(), EngineError> {
-        self.stop_audio();
+        self.stop_audio_session_only();
 
         let mut feed_ids = Vec::new();
         for ch in &self.channels {
@@ -1789,6 +2042,9 @@ impl MixerEngine {
         self.active_feed_ids = feed_ids;
 
         let _ = cmd_tx.push(MixerCommand::SetChannelCount(self.channels.len()));
+        let _ = cmd_tx.push(MixerCommand::SetVirtualMicGainDb(
+            self.master.virtual_mic_gain_db,
+        ));
         self.cmd_tx = Some(cmd_tx);
         for (ch_idx, ch) in self.channels.iter().enumerate() {
             Self::push_channel_state_to_rt(
@@ -1823,12 +2079,23 @@ impl MixerEngine {
         }
 
         self.session = Some(session);
+        if self.master.virtual_mic_enabled && self.virtual_mic.is_some() {
+            if let Err(e) = self.attach_virtual_mic_pipe() {
+                log::warn!("Virtual mic pipe reconnect warning: {e}");
+            }
+        }
         Ok(())
     }
 
-    pub fn stop_audio(&mut self) {
+    fn stop_audio_session_only(&mut self) {
         let _ = self.stop_recording();
+        if let Some(ref mut vmic) = self.virtual_mic {
+            if let Some(mut pipe) = vmic.pipe.take() {
+                pipe.stop();
+            }
+        }
         if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::SetVirtualMicTx(None));
             for ch in 0..self.channels.len() {
                 for slot in 0..MAX_MIXER_INSERTS {
                     let _ = tx.push(MixerCommand::SetChannelInsert {
@@ -1852,6 +2119,148 @@ impl MixerEngine {
         self.session = None;
         self.cmd_tx = None;
         self.active_feed_ids.clear();
+    }
+
+    pub fn stop_audio(&mut self) {
+        self.disable_virtual_mic();
+        self.stop_audio_session_only();
+    }
+
+    pub fn enable_virtual_mic(
+        &mut self,
+        fallback_output_device: Option<&str>,
+    ) -> Result<String, EngineError> {
+        if !self.is_audio_running() {
+            self.ensure_audio_running(fallback_output_device)?;
+        }
+        if self.virtual_mic.is_none() {
+            cleanup_stale_virtual_mic_modules();
+            let sr = self.sample_rate();
+            let sink_mod = load_pactl_module(&[
+                "load-module",
+                "module-null-sink",
+                &format!("sink_name={VIRTUAL_MIC_SINK_NAME}"),
+                &format!("rate={sr}"),
+                "channels=2",
+                "sink_properties=device.description=\"Chronomix_Virtual_Bus\"",
+            ])?;
+            let source_mod = match load_pactl_module(&[
+                "load-module",
+                "module-remap-source",
+                &format!("master={VIRTUAL_MIC_SINK_NAME}.monitor"),
+                &format!("source_name={VIRTUAL_MIC_SOURCE_NAME}"),
+                "channels=2",
+                "source_properties=device.description=\"Chronomix_Virtual_Mic_(Discord/OBS)\"",
+            ]) {
+                Ok(id) => Some(id),
+                Err(_) => None,
+            };
+            self.virtual_mic = Some(ActiveVirtualMic {
+                sink_module_id: Some(sink_mod),
+                source_module_id: source_mod,
+                pipe: None,
+            });
+        }
+        self.master.virtual_mic_enabled = true;
+        self.attach_virtual_mic_pipe()?;
+        self.telemetry
+            .virtual_mic_active
+            .store(true, Ordering::Relaxed);
+        Ok(VIRTUAL_MIC_DISPLAY_NAME.to_string())
+    }
+
+    fn attach_virtual_mic_pipe(&mut self) -> Result<(), EngineError> {
+        let sr = self.sample_rate();
+        let Some(ref mut vmic) = self.virtual_mic else {
+            return Ok(());
+        };
+        if let Some(mut old_pipe) = vmic.pipe.take() {
+            old_pipe.stop();
+        }
+        let child = spawn_virtual_mic_writer_process(sr)?;
+        let (tx, mut rx) = RingBuffer::<f32>::new((sr as usize).max(48_000) * 4);
+        if let Some(ref mut cmd_tx) = self.cmd_tx {
+            let _ = cmd_tx.push(MixerCommand::SetVirtualMicGainDb(
+                self.master.virtual_mic_gain_db,
+            ));
+            let _ = cmd_tx.push(MixerCommand::SetVirtualMicTx(Some(tx)));
+        }
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop_flag);
+        let child_arc = Arc::new(Mutex::new(Some(child)));
+        let child_thread = Arc::clone(&child_arc);
+
+        let stdin_opt = child_arc
+            .lock()
+            .ok()
+            .and_then(|mut g| g.as_mut().and_then(|c| c.stdin.take()));
+
+        let join_handle = thread::spawn(move || {
+            let Some(mut stdin) = stdin_opt else {
+                return;
+            };
+            let mut byte_buf = Vec::with_capacity(4096);
+            loop {
+                if stop_thread.load(Ordering::Relaxed) {
+                    break;
+                }
+                byte_buf.clear();
+                while byte_buf.len() < 2048 {
+                    match rx.pop() {
+                        Ok(sample) => {
+                            byte_buf.extend_from_slice(&sample.to_le_bytes());
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if !byte_buf.is_empty() {
+                    if stdin.write_all(&byte_buf).is_err() {
+                        break;
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(2));
+                }
+            }
+            drop(stdin);
+            if let Ok(mut guard) = child_thread.lock() {
+                if let Some(ref mut c) = *guard {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                *guard = None;
+            }
+        });
+
+        vmic.pipe = Some(ActiveVirtualMicPipe {
+            stop_flag,
+            join_handle: Some(join_handle),
+            child: child_arc,
+        });
+        Ok(())
+    }
+
+    pub fn disable_virtual_mic(&mut self) {
+        self.master.virtual_mic_enabled = false;
+        self.telemetry
+            .virtual_mic_active
+            .store(false, Ordering::Relaxed);
+        self.telemetry.virtual_mic_peak_l.store(0, Ordering::Relaxed);
+        self.telemetry.virtual_mic_peak_r.store(0, Ordering::Relaxed);
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::SetVirtualMicTx(None));
+        }
+        if let Some(mut vmic) = self.virtual_mic.take() {
+            if let Some(mut pipe) = vmic.pipe.take() {
+                pipe.stop();
+            }
+            if let Some(id) = vmic.source_module_id {
+                unload_pactl_module(id);
+            }
+            if let Some(id) = vmic.sink_module_id {
+                unload_pactl_module(id);
+            }
+        }
     }
 
     fn slot_mut(
@@ -2252,10 +2661,99 @@ impl MixerEngine {
             channels,
             master_left: f32::from_bits(self.telemetry.master_peak_l.swap(0, Ordering::Relaxed)),
             master_right: f32::from_bits(self.telemetry.master_peak_r.swap(0, Ordering::Relaxed)),
+            virtual_mic_left: f32::from_bits(
+                self.telemetry.virtual_mic_peak_l.swap(0, Ordering::Relaxed),
+            ),
+            virtual_mic_right: f32::from_bits(
+                self.telemetry.virtual_mic_peak_r.swap(0, Ordering::Relaxed),
+            ),
+            is_virtual_mic_active: self.telemetry.virtual_mic_active.load(Ordering::Relaxed),
             recorded_frames: self.telemetry.recorded_frames.load(Ordering::Relaxed),
             is_recording: self.telemetry.recording_active.load(Ordering::Relaxed),
         }
     }
+}
+
+fn load_pactl_module(args: &[&str]) -> Result<u32, EngineError> {
+    let out = Command::new("pactl")
+        .args(args)
+        .output()
+        .map_err(|e| EngineError::Recording(format!("Failed to execute pactl: {e}")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(EngineError::Recording(format!("pactl error: {stderr}")));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    stdout
+        .parse::<u32>()
+        .map_err(|e| EngineError::Recording(format!("Invalid pactl module ID '{stdout}': {e}")))
+}
+
+fn unload_pactl_module(id: u32) {
+    let _ = Command::new("pactl")
+        .args(["unload-module", &id.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn cleanup_stale_virtual_mic_modules() {
+    let Ok(out) = Command::new("pactl").args(["list", "short", "modules"]).output() else {
+        return;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut ids: Vec<u32> = Vec::new();
+    for line in text.lines() {
+        if line.contains(VIRTUAL_MIC_SINK_NAME) || line.contains(VIRTUAL_MIC_SOURCE_NAME) {
+            if let Some(first) = line.split_whitespace().next() {
+                if let Ok(id) = first.parse::<u32>() {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids.reverse();
+    for id in ids {
+        unload_pactl_module(id);
+    }
+}
+
+fn spawn_virtual_mic_writer_process(sample_rate: u32) -> Result<Child, EngineError> {
+    let sr_str = sample_rate.max(8000).to_string();
+    if let Ok(child) = Command::new("pacat")
+        .args([
+            "--playback",
+            &format!("--device={VIRTUAL_MIC_SINK_NAME}"),
+            &format!("--rate={sr_str}"),
+            "--channels=2",
+            "--format=float32le",
+            "--latency-msec=15",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        return Ok(child);
+    }
+    Command::new("pw-cat")
+        .args([
+            "--playback",
+            &format!("--target={VIRTUAL_MIC_SINK_NAME}"),
+            &format!("--rate={sr_str}"),
+            "--channels=2",
+            "--format=f32",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            EngineError::Recording(format!(
+                "Failed to start virtual mic audio stream (pacat/pw-cat): {e}"
+            ))
+        })
 }
 
 fn decode_audio_file(path: &Path, target_sr: u32) -> Result<MediaBuffer, EngineError> {
@@ -2573,11 +3071,13 @@ mod tests {
     fn channels_expand_to_max_and_remove_shifts_cleanly() {
         let mut engine = MixerEngine::new();
         assert_eq!(engine.channels().len(), DEFAULT_MIXER_CHANNELS);
+        assert_eq!(DEFAULT_MIXER_CHANNELS, 2);
         let media_idx = engine.add_multimedia_channel().unwrap();
         assert_eq!(
             engine.channel(media_idx).unwrap().source.mode,
             ChannelInputMode::Multimedia
         );
+        assert_eq!(engine.channel(media_idx).unwrap().icon, ChannelIcon::Media);
         while engine.channels().len() < MAX_MIXER_CHANNELS {
             assert!(engine.add_channel().is_some());
         }
@@ -2587,5 +3087,50 @@ mod tests {
         for (i, ch) in engine.channels().iter().enumerate() {
             assert_eq!(ch.index, i);
         }
+    }
+
+    #[test]
+    fn trim_balance_lpf_and_virtual_mic_routing_process_cleanly() {
+        let telemetry = Arc::new(SharedMixerTelemetry::default());
+        let (mut tx, rx) = RingBuffer::<MixerCommand>::new(64);
+        let mut proc = MixerDspProcessor::new(Arc::clone(&telemetry), rx, 2, 48_000.0);
+
+        let _ = tx.push(MixerCommand::SetChannelRouting {
+            ch: 0,
+            feed_idx: Some(0),
+            mode: ChannelInputMode::Stereo(0, 1),
+        });
+        let _ = tx.push(MixerCommand::SetChannelRouting {
+            ch: 1,
+            feed_idx: Some(1),
+            mode: ChannelInputMode::Mono(0),
+        });
+
+        let mut ch0_dsp = ChannelDspConfig::default();
+        ch0_dsp.balance = -1.0;
+        ch0_dsp.solo = true;
+        ch0_dsp.send_to_virtual_mic = true;
+        let _ = tx.push(MixerCommand::SetChannelDsp { ch: 0, dsp: ch0_dsp });
+
+        let mut ch1_dsp = ChannelDspConfig::default();
+        ch1_dsp.solo_safe = true;
+        ch1_dsp.send_to_virtual_mic = false;
+        let _ = tx.push(MixerCommand::SetChannelDsp { ch: 1, dsp: ch1_dsp });
+
+        let (vtx, mut vrx) = RingBuffer::<f32>::new(64);
+        let _ = tx.push(MixerCommand::SetVirtualMicTx(Some(vtx)));
+
+        let f0 = [0.4_f32, 0.4, 0.4, 0.4];
+        let f1 = [0.2_f32, 0.2];
+        let mut out_l = [0.0_f32; 2];
+        let mut out_r = [0.0_f32; 2];
+        proc.process(&[&f0, &f1], &[2, 1], &mut out_l, &mut out_r, 2, 48_000.0);
+
+        assert!((out_l[0] - 0.6).abs() < 1e-4);
+        assert!((out_r[0] - 0.2).abs() < 1e-4);
+        let v_l = vrx.pop().unwrap();
+        let v_r = vrx.pop().unwrap();
+        assert!((v_l - 0.4).abs() < 1e-4);
+        assert!(v_r.abs() < 1e-4);
     }
 }

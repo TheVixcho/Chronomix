@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Shape,
-    Stroke, StrokeKind, Vec2,
+    self, Align2, Color32, ColorImage, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense,
+    Shape, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use pedal_audio::AudioDeviceInfo;
 use pedal_engine::{
-    ChannelDspConfig, ChannelInputMode, ChannelInputSource, MAX_MIXER_CHANNELS, MAX_MIXER_INSERTS,
-    MixerChannelState, MixerEngine, MixerInsertTarget, MixerMeterSnapshot, eval_channel_eq_db,
+    ChannelDspConfig, ChannelIcon, ChannelInputMode, ChannelInputSource, MAX_MIXER_CHANNELS,
+    MAX_MIXER_INSERTS, MixerChannelState, MixerEngine, MixerInsertTarget, MixerMeterSnapshot,
+    VIRTUAL_MIC_DISPLAY_NAME, eval_channel_eq_db,
 };
 use vst3_host::PluginInfo;
 
@@ -41,6 +42,7 @@ pub struct MixerUiState {
     pub param_filter: String,
     pub meters: MixerMeterSnapshot,
     pub peak_hold_master: [f32; 2],
+    pub peak_hold_vmic: [f32; 2],
     pub peak_hold_channels: Vec<[f32; 2]>,
     pub selected_output: String,
     pub sample_rate: u32,
@@ -50,6 +52,7 @@ pub struct MixerUiState {
     pub pending_fader_scroll_x: Option<f32>,
     pub last_fader_scroll_x: f32,
     pub last_fader_max_scroll_x: f32,
+    pub custom_icon_textures: HashMap<PathBuf, Option<TextureHandle>>,
 }
 
 impl MixerUiState {
@@ -65,10 +68,14 @@ impl MixerUiState {
                 channels: Vec::new(),
                 master_left: 0.0,
                 master_right: 0.0,
+                virtual_mic_left: 0.0,
+                virtual_mic_right: 0.0,
+                is_virtual_mic_active: false,
                 recorded_frames: 0,
                 is_recording: false,
             },
             peak_hold_master: [0.0, 0.0],
+            peak_hold_vmic: [0.0, 0.0],
             peak_hold_channels: vec![[0.0, 0.0]; default_channels],
             selected_output: default_output,
             sample_rate: 48_000,
@@ -78,6 +85,7 @@ impl MixerUiState {
             pending_fader_scroll_x: None,
             last_fader_scroll_x: 0.0,
             last_fader_max_scroll_x: 0.0,
+            custom_icon_textures: HashMap::new(),
         }
     }
 
@@ -93,6 +101,8 @@ impl MixerUiState {
         }
         self.peak_hold_master[0] = (self.peak_hold_master[0] * 0.94).max(snap.master_left);
         self.peak_hold_master[1] = (self.peak_hold_master[1] * 0.94).max(snap.master_right);
+        self.peak_hold_vmic[0] = (self.peak_hold_vmic[0] * 0.94).max(snap.virtual_mic_left);
+        self.peak_hold_vmic[1] = (self.peak_hold_vmic[1] * 0.94).max(snap.virtual_mic_right);
         self.meters = snap;
     }
 }
@@ -116,7 +126,7 @@ impl WingColors {
     const WALNUT_DARK: Color32 = Color32::from_rgb(64, 31, 13);
 }
 
-const WING_PALETTE_SWATCHES: [[u8; 3]; 8] = [
+const WING_PALETTE_SWATCHES: [[u8; 3]; 12] = [
     [236, 72, 153],
     [14, 165, 233],
     [16, 185, 129],
@@ -125,6 +135,10 @@ const WING_PALETTE_SWATCHES: [[u8; 3]; 8] = [
     [59, 130, 246],
     [239, 68, 68],
     [20, 184, 166],
+    [132, 204, 22],
+    [249, 115, 22],
+    [234, 179, 8],
+    [148, 163, 184],
 ];
 
 pub struct MixerPanelContext<'a> {
@@ -149,20 +163,27 @@ pub fn render_mixer_panel(ui: &mut egui::Ui, ctx: MixerPanelContext<'_>) {
     }
 
     let mut ctx = ctx;
+    let viewport_w = ui.available_width().max(260.0);
+    ui.set_max_width(viewport_w);
     egui::ScrollArea::vertical()
         .id_salt("mixer_panel_vertical_scroll")
         .auto_shrink([false, false])
+        .max_width(viewport_w)
         .show(ui, |ui| {
+            let scroll_inner_w = ui.available_width().max(240.0);
+            ui.set_max_width(scroll_inner_w);
             egui::Frame::new()
                 .fill(WingColors::CHASSIS)
                 .stroke(Stroke::new(1.2_f32, Color32::from_rgb(44, 49, 62)))
                 .corner_radius(CornerRadius::same(3))
-                .inner_margin(Margin::same(10))
+                .inner_margin(Margin::same(8))
                 .show(ui, |ui| {
+                    let chassis_w = ui.available_width().max(220.0);
+                    ui.set_max_width(chassis_w);
                     render_upper_console_deck(ui, &mut ctx);
-                    ui.add_space(10.0);
-                    render_fader_bank(ui, &mut ctx);
                     ui.add_space(8.0);
+                    render_fader_bank(ui, &mut ctx);
+                    ui.add_space(6.0);
                     draw_wing_wood_bolster(ui);
                 });
         });
@@ -171,13 +192,15 @@ pub fn render_mixer_panel(ui: &mut egui::Ui, ctx: MixerPanelContext<'_>) {
 fn render_upper_console_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let avail_w = ui.available_width();
     if avail_w >= 860.0 {
-        let monitor_w = (avail_w * 0.24).clamp(215.0, 265.0);
-        let screen_w = (avail_w - monitor_w - 10.0).max(400.0);
+        let gap = ui.spacing().item_spacing.x;
+        let monitor_w = (avail_w * 0.24).clamp(206.0, 246.0).floor();
+        let screen_w = (avail_w - monitor_w - gap - 2.0).max(320.0).floor();
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 Vec2::new(screen_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_max_width(screen_w);
                     render_wing_touchscreen(ui, ctx);
                 },
             );
@@ -185,6 +208,7 @@ fn render_upper_console_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>)
                 Vec2::new(monitor_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_max_width(monitor_w);
                     render_wing_monitor_deck(ui, ctx);
                 },
             );
@@ -198,7 +222,9 @@ fn render_upper_console_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>)
 
 fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let t = ctx.lang.text();
-    let narrow = ui.available_width() < 640.0;
+    let outer_w = ui.available_width().max(220.0);
+    ui.set_max_width(outer_w);
+    let narrow = outer_w < 660.0;
 
     egui::Frame::new()
         .fill(WingColors::BEZEL)
@@ -206,6 +232,8 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
         .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
+            let bezel_w = ui.available_width().max(200.0);
+            ui.set_max_width(bezel_w);
             let tabs = [
                 (WingScreenTab::Home, t.mixer_tab_home),
                 (WingScreenTab::Source, t.mixer_tab_source),
@@ -218,23 +246,35 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
             if narrow {
                 ui.horizontal_wrapped(|ui| {
                     for (tab, label) in tabs {
-                        draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, 82.0);
+                        draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, 80.0);
                     }
                 });
                 ui.add_space(6.0);
                 render_touchscreen_display(ui, ctx);
             } else {
+                let tab_w = 84.0;
+                let gap = ui.spacing().item_spacing.x + 4.0;
+                let disp_w = (bezel_w - tab_w - gap).max(200.0).floor();
                 ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 5.0;
-                        for (tab, label) in tabs {
-                            draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, 88.0);
-                        }
-                    });
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(tab_w, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.y = 5.0;
+                            for (tab, label) in tabs {
+                                draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, tab_w);
+                            }
+                        },
+                    );
                     ui.add_space(4.0);
-                    ui.vertical(|ui| {
-                        render_touchscreen_display(ui, ctx);
-                    });
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(disp_w, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_max_width(disp_w);
+                            render_touchscreen_display(ui, ctx);
+                        },
+                    );
                 });
             }
         });
@@ -290,7 +330,7 @@ fn draw_wing_bezel_tab(
             rect.center(),
             Align2::CENTER_CENTER,
             label,
-            FontId::monospace(10.5),
+            FontId::monospace(10.0),
             txt_col,
         );
     }
@@ -298,17 +338,21 @@ fn draw_wing_bezel_tab(
 
 fn render_touchscreen_display(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let t = ctx.lang.text();
+    let disp_w = ui.available_width().max(180.0);
+    ui.set_max_width(disp_w);
 
     egui::Frame::new()
         .fill(WingColors::SCREEN)
         .stroke(Stroke::new(1.0_f32, Color32::from_rgb(50, 62, 84)))
         .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::same(10))
+        .inner_margin(Margin::same(8))
         .show(ui, |ui| {
+            let inner_w = ui.available_width().max(160.0);
+            ui.set_max_width(inner_w);
             render_screen_header(ui, ctx);
-            ui.add_space(6.0);
+            ui.add_space(5.0);
             render_screen_signal_blocks(ui, ctx, t);
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
             match ctx.state.active_tab {
                 WingScreenTab::Home => render_screen_home_tab(ui, ctx),
@@ -326,58 +370,80 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let t = ctx.lang.text();
 
     ui.horizontal_wrapped(|ui| {
-        let (tag_bg, tag_title, src_summary, mut maybe_ch_rec) = match ctx.state.selection {
-            WingSelection::Channel(idx) => {
-                let ch = &ctx.mixer.channels()[idx];
-                let rgb = ch.color;
-                let bg = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                let src = match ch.source.mode {
-                    ChannelInputMode::Unassigned => t.mixer_unassigned.to_string(),
-                    ChannelInputMode::Multimedia => {
-                        if ch.media.loading {
-                            t.mixer_media_loading.to_string()
-                        } else if !ch.media.title.is_empty() {
-                            format!("MEDIA · {}", truncate_chars(&ch.media.title, 22))
-                        } else {
-                            t.mixer_media_no_track.to_string()
+        let (tag_bg, tag_title, src_summary, maybe_icon, mut maybe_ch_rec) =
+            match ctx.state.selection {
+                WingSelection::Channel(idx) => {
+                    let ch = &ctx.mixer.channels()[idx];
+                    let rgb = ch.color;
+                    let bg = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    let src = match ch.source.mode {
+                        ChannelInputMode::Unassigned => t.mixer_unassigned.to_string(),
+                        ChannelInputMode::Multimedia => {
+                            if ch.media.loading {
+                                t.mixer_media_loading.to_string()
+                            } else if !ch.media.title.is_empty() {
+                                format!("MEDIA · {}", truncate_chars(&ch.media.title, 20))
+                            } else {
+                                t.mixer_media_no_track.to_string()
+                            }
                         }
-                    }
-                    mode => format!("{} · {}", ch.source.device_label, format_input_mode(mode)),
-                };
-                (
-                    bg,
-                    format!("CH {:02}  {}", idx + 1, ch.name),
-                    src,
-                    Some((idx, ch.dsp)),
-                )
-            }
-            WingSelection::Master => {
-                let out_name = ctx
-                    .output_devices
-                    .iter()
-                    .find(|d| d.id == ctx.state.selected_output)
-                    .map(|d| d.name.clone())
-                    .unwrap_or_else(|| ctx.state.selected_output.clone());
-                (
-                    WingColors::WING_ORANGE,
-                    "MAIN L/R  MASTER BUS".to_string(),
-                    out_name,
-                    None,
-                )
-            }
-        };
+                        mode => format!(
+                            "{} · {}",
+                            truncate_chars(&ch.source.device_label, 14),
+                            format_input_mode(mode)
+                        ),
+                    };
+                    (
+                        bg,
+                        format!("CH {:02}  {}", idx + 1, truncate_chars(&ch.name, 12)),
+                        src,
+                        Some(ch.icon.clone()),
+                        Some((idx, ch.dsp)),
+                    )
+                }
+                WingSelection::Master => {
+                    let out_name = ctx
+                        .output_devices
+                        .iter()
+                        .find(|d| d.id == ctx.state.selected_output)
+                        .map(|d| short_device_name(&d.name))
+                        .unwrap_or_else(|| ctx.state.selected_output.clone());
+                    (
+                        WingColors::WING_ORANGE,
+                        "MAIN L/R  MASTER".to_string(),
+                        out_name,
+                        None,
+                        None,
+                    )
+                }
+            };
 
         egui::Frame::new()
             .fill(tag_bg)
             .corner_radius(CornerRadius::same(2))
-            .inner_margin(Margin::symmetric(10, 4))
+            .inner_margin(Margin::symmetric(8, 3))
             .show(ui, |ui| {
-                ui.label(
-                    RichText::new(tag_title)
-                        .strong()
-                        .size(12.5)
-                        .color(Color32::from_rgb(12, 14, 20)),
-                );
+                ui.horizontal(|ui| {
+                    if let Some(ref ic) = maybe_icon {
+                        if *ic != ChannelIcon::None {
+                            let (ic_rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                            draw_channel_icon(
+                                ui,
+                                ctx.state,
+                                ic_rect,
+                                ic,
+                                Color32::from_rgb(12, 14, 20),
+                            );
+                        }
+                    }
+                    ui.label(
+                        RichText::new(tag_title)
+                            .strong()
+                            .size(12.0)
+                            .color(Color32::from_rgb(12, 14, 20)),
+                    );
+                });
             });
 
         if ui.small_button("<").clicked() {
@@ -399,7 +465,7 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
             .fill(Color32::from_rgb(20, 26, 38))
             .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(2))
-            .inner_margin(Margin::symmetric(8, 3))
+            .inner_margin(Margin::symmetric(7, 3))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(src_summary)
@@ -411,39 +477,33 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
 
         if let Some((ch_idx, mut dsp)) = maybe_ch_rec.take() {
             let lbl = if dsp.record_arm { "REC ON" } else { "REC OFF" };
-            let r = ui
-                .horizontal(|ui| {
-                    draw_console_switch(
-                        ui,
-                        lbl,
-                        dsp.record_arm,
-                        StudioPalette::ACCENT_CRIMSON,
-                        Vec2::new(68.0, 22.0),
-                    )
-                })
-                .inner;
+            let r = draw_console_switch(
+                ui,
+                lbl,
+                dsp.record_arm,
+                StudioPalette::ACCENT_CRIMSON,
+                Vec2::new(64.0, 21.0),
+            );
             if r {
                 dsp.record_arm = !dsp.record_arm;
                 ctx.mixer.set_channel_dsp(ch_idx, dsp);
             }
         }
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let sr_khz = ctx.mixer.sample_rate() as f32 / 1000.0;
-            let live = ctx.mixer.is_audio_running();
-            let (stat_lbl, stat_col) = if live {
-                (
-                    format!("LIVE · {:.1}kHz · {} smp", sr_khz, ctx.mixer.block_size()),
-                    StudioPalette::ACCENT_EMERALD,
-                )
-            } else {
-                (
-                    format!("OFFLINE · {:.1}kHz", sr_khz),
-                    StudioPalette::TEXT_MUTED,
-                )
-            };
-            ui.label(RichText::new(stat_lbl).small().monospace().color(stat_col));
-        });
+        let sr_khz = ctx.mixer.sample_rate() as f32 / 1000.0;
+        let live = ctx.mixer.is_audio_running();
+        let (stat_lbl, stat_col) = if live {
+            (
+                format!("LIVE {:.1}kHz/{}smp", sr_khz, ctx.mixer.block_size()),
+                StudioPalette::ACCENT_EMERALD,
+            )
+        } else {
+            (
+                format!("OFFLINE {:.1}kHz", sr_khz),
+                StudioPalette::TEXT_MUTED,
+            )
+        };
+        ui.label(RichText::new(stat_lbl).small().monospace().color(stat_col));
     });
 }
 
@@ -518,20 +578,23 @@ fn render_screen_signal_blocks(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_
 }
 
 fn render_screen_home_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
-    let narrow = ui.available_width() < 560.0;
+    let total = ui.available_width().max(180.0);
+    ui.set_max_width(total);
+    let narrow = total < 620.0;
     if narrow {
         render_home_eq_preview(ui, ctx);
-        ui.add_space(8.0);
+        ui.add_space(6.0);
         render_upper_vst_rack_section(ui, ctx, false);
     } else {
-        let total = ui.available_width();
-        let left_w = (total * 0.50).max(240.0);
-        let right_w = (total - left_w - 8.0).max(220.0);
+        let gap = ui.spacing().item_spacing.x;
+        let left_w = ((total - gap) * 0.53).floor().max(180.0);
+        let right_w = (total - gap - left_w).floor().max(160.0);
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 Vec2::new(left_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_max_width(left_w);
                     render_home_eq_preview(ui, ctx);
                 },
             );
@@ -539,6 +602,7 @@ fn render_screen_home_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                 Vec2::new(right_w, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_max_width(right_w);
                     render_upper_vst_rack_section(ui, ctx, false);
                 },
             );
@@ -550,6 +614,12 @@ fn render_home_eq_preview(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let t = ctx.lang.text();
     match ctx.state.selection {
         WingSelection::Channel(idx) => {
+            let ch_snapshot = ctx.mixer.channels()[idx].clone();
+            if ch_snapshot.source.mode == ChannelInputMode::Multimedia {
+                render_multimedia_source_deck(ui, ctx, idx, &ch_snapshot);
+                ui.add_space(4.0);
+            }
+
             let mut dsp = ctx.mixer.channels()[idx].dsp;
             let sr = ctx.mixer.sample_rate() as f32;
             let mut changed = false;
@@ -558,19 +628,45 @@ fn render_home_eq_preview(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                 ui.label(
                     RichText::new(t.mixer_trim_label)
                         .small()
-                        .color(StudioPalette::TEXT_SECONDARY),
+                        .monospace()
+                        .color(StudioPalette::ACCENT_CYAN),
                 );
                 if ui
                     .add(
-                        egui::Slider::new(&mut dsp.trim_db, -24.0..=24.0)
-                            .suffix(" dB")
-                            .fixed_decimals(1),
+                        egui::DragValue::new(&mut dsp.trim_db)
+                            .range(-24.0..=24.0)
+                            .speed(0.15)
+                            .suffix(" dB"),
                     )
                     .changed()
                 {
                     changed = true;
                 }
+
+                ui.label(
+                    RichText::new(t.mixer_balance_label)
+                        .small()
+                        .monospace()
+                        .color(WingColors::WING_ORANGE),
+                );
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut dsp.balance)
+                            .range(-1.0..=1.0)
+                            .speed(0.02),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+
+                if ui.checkbox(&mut dsp.phase_invert, "Ø").changed() {
+                    changed = true;
+                }
                 if ui.checkbox(&mut dsp.hpf_enabled, "HPF").changed() {
+                    changed = true;
+                }
+                if ui.checkbox(&mut dsp.lpf_enabled, "LPF").changed() {
                     changed = true;
                 }
                 if ui.checkbox(&mut dsp.gate_enabled, "GATE").changed() {
@@ -582,7 +678,7 @@ fn render_home_eq_preview(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
             });
 
             ui.add_space(4.0);
-            draw_wing_eq_curve(ui, &dsp, sr, 128.0);
+            draw_wing_eq_curve(ui, &dsp, sr, 118.0);
             ui.add_space(4.0);
 
             ui.horizontal_wrapped(|ui| {
@@ -623,6 +719,27 @@ fn render_home_eq_preview(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                         )
                         .changed()
                     {
+                        changed = true;
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(t.mixer_width_label)
+                            .small()
+                            .monospace()
+                            .color(StudioPalette::ACCENT_EMERALD),
+                    );
+                    let mut width_pct = dsp.stereo_width * 100.0;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut width_pct)
+                                .range(0.0..=200.0)
+                                .speed(1.0)
+                                .suffix("%"),
+                        )
+                        .changed()
+                    {
+                        dsp.stereo_width = (width_pct / 100.0).clamp(0.0, 2.0);
                         changed = true;
                     }
                 });
@@ -695,9 +812,9 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
 
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(t.mixer_channel_name).strong().color(StudioPalette::TEXT_SECONDARY));
-        let edit_w = (ui.available_width() * 0.4).clamp(110.0, 190.0);
+        let edit_w = (ui.available_width() * 0.28).clamp(95.0, 165.0);
         if ui
-            .add_sized(Vec2::new(edit_w, 24.0), egui::TextEdit::singleline(&mut name_buf))
+            .add_sized(Vec2::new(edit_w, 22.0), egui::TextEdit::singleline(&mut name_buf))
             .changed()
         {
             ctx.mixer.set_channel_name(idx, name_buf);
@@ -707,7 +824,7 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         for rgb in WING_PALETTE_SWATCHES {
             let swatch = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
             let selected = ch.color == rgb;
-            let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
             if resp.clicked() {
                 ctx.mixer.set_channel_color(idx, rgb);
             }
@@ -723,7 +840,10 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         }
     });
 
-    ui.add_space(6.0);
+    ui.add_space(4.0);
+    render_channel_icon_picker_row(ui, ctx, idx, &ch.icon);
+
+    ui.add_space(5.0);
     if ch.source.mode == ChannelInputMode::Multimedia {
         render_multimedia_source_deck(ui, ctx, idx, &ch);
     } else {
@@ -736,7 +856,7 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
 
             let mut next_source: Option<ChannelInputSource> = None;
             egui::ComboBox::from_id_salt(("wing_source_combo", idx))
-                .width((ui.available_width() - 230.0).clamp(130.0, 320.0))
+                .width((ui.available_width() - 195.0).clamp(120.0, 290.0))
                 .selected_text(cur_label)
                 .show_ui(ui, |ui| {
                     if ui
@@ -829,13 +949,51 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         }
         if draw_rotary_knob(
             ui,
+            &format!("wing_src_bal_{idx}"),
+            t.mixer_balance_label,
+            &mut dsp.balance,
+            -1.0..=1.0,
+            0.0,
+            "",
+            WingColors::WING_ORANGE,
+        ) {
+            dsp_changed = true;
+        }
+        let mut width_pct = dsp.stereo_width * 100.0;
+        if draw_rotary_knob(
+            ui,
+            &format!("wing_src_width_{idx}"),
+            t.mixer_width_label,
+            &mut width_pct,
+            0.0..=200.0,
+            100.0,
+            "%",
+            StudioPalette::ACCENT_PURPLE,
+        ) {
+            dsp.stereo_width = (width_pct / 100.0).clamp(0.0, 2.0);
+            dsp_changed = true;
+        }
+        if draw_rotary_knob(
+            ui,
             &format!("wing_src_hpf_{idx}"),
-            "HPF Freq",
+            "LCUT Hz",
             &mut dsp.hpf_freq_hz,
             20.0..=400.0,
             80.0,
             "Hz",
             WingColors::WING_ORANGE,
+        ) {
+            dsp_changed = true;
+        }
+        if draw_rotary_knob(
+            ui,
+            &format!("wing_src_lpf_{idx}"),
+            t.mixer_lpf_label,
+            &mut dsp.lpf_freq_hz,
+            1500.0..=20000.0,
+            16000.0,
+            "Hz",
+            StudioPalette::ACCENT_AMBER,
         ) {
             dsp_changed = true;
         }
@@ -853,20 +1011,140 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         }
     });
 
+    ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.checkbox(&mut dsp.phase_invert, "Ø Phase").changed() {
+        if ui.checkbox(&mut dsp.phase_invert, "Ø 180°").changed() {
             dsp_changed = true;
         }
-        if ui.checkbox(&mut dsp.hpf_enabled, "HPF On").changed() {
+        if ui.checkbox(&mut dsp.swap_lr, t.mixer_swap_lr).changed() {
+            dsp_changed = true;
+        }
+        if ui.checkbox(&mut dsp.hpf_enabled, "LCUT (HPF)").changed() {
+            dsp_changed = true;
+        }
+        if ui.checkbox(&mut dsp.lpf_enabled, t.mixer_lpf_label).changed() {
+            dsp_changed = true;
+        }
+        if ui.checkbox(&mut dsp.solo_safe, t.mixer_solo_safe).changed() {
+            dsp_changed = true;
+        }
+        if ui.checkbox(&mut dsp.fx_bypass, t.mixer_fx_bypass).changed() {
             dsp_changed = true;
         }
         if ui.checkbox(&mut dsp.pre_fader_rec, t.mixer_pre_fader_rec).changed() {
+            dsp_changed = true;
+        }
+        if ui
+            .checkbox(&mut dsp.send_to_virtual_mic, t.mixer_vmic_send_ch)
+            .changed()
+        {
             dsp_changed = true;
         }
     });
 
     if dsp_changed {
         ctx.mixer.set_channel_dsp(idx, dsp);
+    }
+}
+
+fn render_channel_icon_picker_row(
+    ui: &mut egui::Ui,
+    ctx: &mut MixerPanelContext<'_>,
+    idx: usize,
+    current_icon: &ChannelIcon,
+) {
+    let t = ctx.lang.text();
+    let mut chosen_icon: Option<ChannelIcon> = None;
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(t.mixer_icon_label)
+                .small()
+                .strong()
+                .color(StudioPalette::TEXT_SECONDARY),
+        );
+        for preset in ChannelIcon::presets() {
+            let active = current_icon == preset;
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(26.0, 22.0), Sense::click());
+            if resp.clicked() {
+                chosen_icon = Some(preset.clone());
+            }
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let bg = if active {
+                Color32::from_rgb(36, 52, 74)
+            } else {
+                Color32::from_rgb(20, 24, 34)
+            };
+            let stroke_col = if active {
+                StudioPalette::ACCENT_CYAN
+            } else {
+                Color32::from_rgb(48, 56, 72)
+            };
+            ui.painter().rect_filled(rect, CornerRadius::same(2), bg);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(2),
+                Stroke::new(1.0_f32, stroke_col),
+                StrokeKind::Inside,
+            );
+            if *preset == ChannelIcon::None {
+                ui.painter().text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    "--",
+                    FontId::monospace(9.0),
+                    StudioPalette::TEXT_MUTED,
+                );
+            } else {
+                let ic_rect = rect.shrink2(Vec2::new(4.0, 2.0));
+                draw_channel_icon(
+                    ui,
+                    ctx.state,
+                    ic_rect,
+                    preset,
+                    if active {
+                        StudioPalette::ACCENT_CYAN
+                    } else {
+                        StudioPalette::TEXT_PRIMARY
+                    },
+                );
+            }
+            resp.on_hover_text(channel_icon_name(preset, ctx.lang));
+        }
+
+        let is_custom = matches!(current_icon, ChannelIcon::CustomImage(_));
+        if ui
+            .add(
+                egui::Button::new(
+                    RichText::new(t.mixer_icon_custom)
+                        .small()
+                        .strong()
+                        .color(if is_custom {
+                            Color32::from_rgb(10, 14, 20)
+                        } else {
+                            Color32::WHITE
+                        }),
+                )
+                .fill(if is_custom {
+                    WingColors::WING_ORANGE
+                } else {
+                    Color32::from_rgb(36, 44, 58)
+                })
+                .corner_radius(CornerRadius::same(2)),
+            )
+            .clicked()
+        {
+            if let Some(img_path) = pick_custom_icon_dialog() {
+                ctx.state.custom_icon_textures.remove(&img_path);
+                chosen_icon = Some(ChannelIcon::CustomImage(img_path));
+            }
+        }
+    });
+
+    if let Some(ic) = chosen_icon {
+        ctx.mixer.set_channel_icon(idx, ic);
     }
 }
 
@@ -887,8 +1165,10 @@ fn render_multimedia_source_deck(
         .fill(Color32::from_rgb(16, 22, 32))
         .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN))
         .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::same(8))
+        .inner_margin(Margin::same(7))
         .show(ui, |ui| {
+            let inner_w = ui.available_width().max(150.0);
+            ui.set_max_width(inner_w);
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add(
@@ -904,6 +1184,23 @@ fn render_multimedia_source_deck(
                     .clicked()
                 {
                     trigger_load_media_dialog(ctx, idx);
+                }
+
+                if ui
+                    .add_enabled(
+                        has_track && !media.loading,
+                        egui::Button::new(
+                            RichText::new(format!("<< {}", t.mixer_media_back_10s))
+                                .small()
+                                .strong(),
+                        )
+                        .corner_radius(CornerRadius::same(2)),
+                    )
+                    .clicked()
+                {
+                    let out = (!ctx.state.selected_output.is_empty())
+                        .then_some(ctx.state.selected_output.as_str());
+                    let _ = ctx.mixer.seek_media_relative_seconds(idx, -10.0, out);
                 }
 
                 let play_lbl = if media.playing {
@@ -952,6 +1249,23 @@ fn render_multimedia_source_deck(
                 if ui
                     .add_enabled(
                         has_track && !media.loading,
+                        egui::Button::new(
+                            RichText::new(format!("{} >>", t.mixer_media_fwd_10s))
+                                .small()
+                                .strong(),
+                        )
+                        .corner_radius(CornerRadius::same(2)),
+                    )
+                    .clicked()
+                {
+                    let out = (!ctx.state.selected_output.is_empty())
+                        .then_some(ctx.state.selected_output.as_str());
+                    let _ = ctx.mixer.seek_media_relative_seconds(idx, 10.0, out);
+                }
+
+                if ui
+                    .add_enabled(
+                        has_track && !media.loading,
                         egui::Button::new(RichText::new(t.mixer_media_stop).small())
                             .corner_radius(CornerRadius::same(2)),
                     )
@@ -969,7 +1283,7 @@ fn render_multimedia_source_deck(
                     t.mixer_media_loop,
                     media.looping,
                     WingColors::WING_ORANGE,
-                    Vec2::new(62.0, 22.0),
+                    Vec2::new(56.0, 21.0),
                 ) {
                     let out = (!ctx.state.selected_output.is_empty())
                         .then_some(ctx.state.selected_output.as_str());
@@ -987,12 +1301,16 @@ fn render_multimedia_source_deck(
                 }
             });
 
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
                 let status_txt = if media.loading {
                     t.mixer_media_loading.to_string()
                 } else if has_track {
-                    format!("{} ({:.1} kHz)", media.title, sr / 1000.0)
+                    format!(
+                        "{} ({:.1} kHz)",
+                        truncate_chars(&media.title, 34),
+                        sr / 1000.0
+                    )
                 } else {
                     t.mixer_media_no_track.to_string()
                 };
@@ -1006,24 +1324,22 @@ fn render_multimedia_source_deck(
                             StudioPalette::TEXT_MUTED
                         }),
                 );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} / {}",
-                            format_media_time(cur_secs),
-                            format_media_time(total_secs)
-                        ))
-                        .small()
-                        .monospace()
-                        .color(StudioPalette::ACCENT_CYAN),
-                    );
-                });
+                ui.label(
+                    RichText::new(format!(
+                        "[{} / {}]",
+                        format_media_time(cur_secs),
+                        format_media_time(total_secs)
+                    ))
+                    .small()
+                    .monospace()
+                    .color(StudioPalette::ACCENT_CYAN),
+                );
             });
 
-            ui.add_space(4.0);
-            let bar_w = ui.available_width().max(120.0);
+            ui.add_space(3.0);
+            let bar_w = ui.available_width().max(100.0);
             let (bar_rect, bar_resp) =
-                ui.allocate_exact_size(Vec2::new(bar_w, 16.0), Sense::click_and_drag());
+                ui.allocate_exact_size(Vec2::new(bar_w, 14.0), Sense::click_and_drag());
             let frac = if media.total_frames > 0 {
                 (media.current_frame as f32 / media.total_frames as f32).clamp(0.0, 1.0)
             } else {
@@ -1033,7 +1349,8 @@ fn render_multimedia_source_deck(
             p.rect_filled(bar_rect, CornerRadius::same(2), Color32::from_rgb(10, 13, 18));
             let fill_w = (bar_rect.width() * frac).max(0.0);
             if fill_w > 0.5 {
-                let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_rect.height()));
+                let fill_rect =
+                    Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_rect.height()));
                 p.rect_filled(
                     fill_rect,
                     CornerRadius::same(2),
@@ -1052,7 +1369,8 @@ fn render_multimedia_source_deck(
             );
             if has_track && (bar_resp.clicked() || bar_resp.dragged()) {
                 if let Some(pos) = bar_resp.interact_pointer_pos() {
-                    let norm = ((pos.x - bar_rect.left()) / bar_rect.width().max(1.0)).clamp(0.0, 1.0);
+                    let norm =
+                        ((pos.x - bar_rect.left()) / bar_rect.width().max(1.0)).clamp(0.0, 1.0);
                     let target_frame = (norm * media.total_frames as f32).round() as usize;
                     let out = (!ctx.state.selected_output.is_empty())
                         .then_some(ctx.state.selected_output.as_str());
@@ -1085,17 +1403,34 @@ fn render_screen_eq_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
         if ui.checkbox(&mut dsp.eq_enabled, "EQ ON").changed() {
             changed = true;
         }
-        if ui.checkbox(&mut dsp.hpf_enabled, "LOW CUT (HPF)").changed() {
+        if ui.checkbox(&mut dsp.hpf_enabled, "LCUT (HPF)").changed() {
             changed = true;
         }
-        ui.add(
-            egui::Slider::new(&mut dsp.hpf_freq_hz, 20.0..=400.0)
-                .logarithmic(true)
-                .suffix(" Hz")
-                .fixed_decimals(0),
-        )
-        .changed()
-        .then(|| changed = true);
+        if ui
+            .add(
+                egui::DragValue::new(&mut dsp.hpf_freq_hz)
+                    .range(20.0..=400.0)
+                    .speed(1.5)
+                    .suffix(" Hz"),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if ui.checkbox(&mut dsp.lpf_enabled, "HCUT (LPF)").changed() {
+            changed = true;
+        }
+        if ui
+            .add(
+                egui::DragValue::new(&mut dsp.lpf_freq_hz)
+                    .range(1500.0..=20000.0)
+                    .speed(25.0)
+                    .suffix(" Hz"),
+            )
+            .changed()
+        {
+            changed = true;
+        }
     });
 
     ui.add_space(4.0);
@@ -1683,26 +2018,141 @@ fn render_screen_io_rec_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
             }
         });
     }
+
+    ui.add_space(8.0);
+    let vmic_active = ctx.mixer.is_virtual_mic_active();
+    let vmic_border = if vmic_active {
+        StudioPalette::ACCENT_EMERALD
+    } else {
+        Color32::from_rgb(52, 62, 82)
+    };
+    egui::Frame::new()
+        .fill(Color32::from_rgb(15, 21, 30))
+        .stroke(Stroke::new(1.2_f32, vmic_border))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::same(8))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(t.mixer_vmic_title)
+                    .small()
+                    .strong()
+                    .monospace()
+                    .color(if vmic_active {
+                        StudioPalette::ACCENT_EMERALD
+                    } else {
+                        StudioPalette::ACCENT_CYAN
+                    }),
+            );
+            ui.label(
+                RichText::new(t.mixer_vmic_desc)
+                    .small()
+                    .color(StudioPalette::TEXT_SECONDARY),
+            );
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let vmic_lbl = if vmic_active {
+                    t.mixer_vmic_toggle_on
+                } else {
+                    t.mixer_vmic_toggle_off
+                };
+                if draw_console_switch(
+                    ui,
+                    vmic_lbl,
+                    vmic_active,
+                    StudioPalette::ACCENT_EMERALD,
+                    Vec2::new(128.0, 24.0),
+                ) {
+                    toggle_virtual_mic(ctx);
+                }
+
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(20, 26, 36))
+                    .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE))
+                    .corner_radius(CornerRadius::same(2))
+                    .inner_margin(Margin::symmetric(6, 3))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(VIRTUAL_MIC_DISPLAY_NAME)
+                                .small()
+                                .monospace()
+                                .color(if vmic_active {
+                                    StudioPalette::ACCENT_EMERALD
+                                } else {
+                                    StudioPalette::TEXT_MUTED
+                                }),
+                        );
+                    });
+
+                let mut vmic_gain = ctx.mixer.master().virtual_mic_gain_db;
+                ui.label(
+                    RichText::new(t.mixer_vmic_gain)
+                        .small()
+                        .color(StudioPalette::TEXT_SECONDARY),
+                );
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut vmic_gain)
+                            .range(-24.0..=18.0)
+                            .speed(0.2)
+                            .suffix(" dB"),
+                    )
+                    .changed()
+                {
+                    ctx.mixer.set_virtual_mic_gain_db(vmic_gain);
+                }
+            });
+
+            ui.add_space(4.0);
+            let ch_len = ctx.mixer.channels().len();
+            let mut ch_toggles: Vec<(usize, ChannelDspConfig)> = Vec::new();
+            ui.horizontal_wrapped(|ui| {
+                for ch_idx in 0..ch_len {
+                    let ch = &ctx.mixer.channels()[ch_idx];
+                    let mut send = ch.dsp.send_to_virtual_mic;
+                    if ui
+                        .checkbox(
+                            &mut send,
+                            RichText::new(format!("CH {:02} {}", ch_idx + 1, truncate_chars(&ch.name, 8)))
+                                .small()
+                                .monospace(),
+                        )
+                        .changed()
+                    {
+                        let mut next_dsp = ch.dsp;
+                        next_dsp.send_to_virtual_mic = send;
+                        ch_toggles.push((ch_idx, next_dsp));
+                    }
+                }
+            });
+            for (ch_idx, next_dsp) in ch_toggles {
+                ctx.mixer.set_channel_dsp(ch_idx, next_dsp);
+            }
+        });
 }
 
 fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let t = ctx.lang.text();
     let live = ctx.mixer.is_audio_running();
     let recording = ctx.mixer.is_recording();
+    let vmic_active = ctx.mixer.is_virtual_mic_active();
     let armed_count = ctx
         .mixer
         .channels()
         .iter()
         .filter(|c| c.dsp.record_arm)
         .count();
+    let outer_w = ui.available_width().max(180.0);
+    ui.set_max_width(outer_w);
 
     egui::Frame::new()
         .fill(WingColors::DECK)
         .stroke(Stroke::new(1.0_f32, Color32::from_rgb(48, 54, 68)))
         .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::same(10))
+        .inner_margin(Margin::same(8))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            let deck_w = ui.available_width().max(160.0);
+            ui.set_max_width(deck_w);
+            ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     let (pw_lbl, pw_col) = if live {
                         (t.mixer_power_on, StudioPalette::ACCENT_EMERALD)
@@ -1716,7 +2166,7 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         pw_lbl,
                         pw_col,
                         live,
-                        Vec2::new(124.0, 32.0),
+                        Vec2::new(112.0, 28.0),
                     )
                     .clicked()
                     {
@@ -1729,7 +2179,7 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         }
                     }
 
-                    ui.add_space(4.0);
+                    ui.add_space(3.0);
 
                     let (rec_lbl, rec_col) = if recording {
                         (t.mixer_rec_stop, StudioPalette::ACCENT_CRIMSON)
@@ -1743,7 +2193,7 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         rec_lbl,
                         rec_col,
                         recording,
-                        Vec2::new(124.0, 32.0),
+                        Vec2::new(112.0, 28.0),
                     )
                     .on_hover_text(t.mixer_rec_only_armed_note)
                     .clicked()
@@ -1751,13 +2201,30 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         toggle_mixer_recording(ctx);
                     }
 
-                    ui.add_space(4.0);
+                    ui.add_space(3.0);
+                    let vmic_lbl = if vmic_active {
+                        t.mixer_vmic_toggle_on
+                    } else {
+                        t.mixer_vmic_toggle_off
+                    };
+                    if draw_console_switch(
+                        ui,
+                        vmic_lbl,
+                        vmic_active,
+                        StudioPalette::ACCENT_EMERALD,
+                        Vec2::new(112.0, 22.0),
+                    ) {
+                        toggle_virtual_mic(ctx);
+                    }
+
+                    ui.add_space(3.0);
                     let secs = ctx.state.meters.recorded_frames as f64
                         / ctx.mixer.sample_rate().max(1) as f64;
                     let mins = (secs / 60.0).floor() as u64;
                     let rem = secs % 60.0;
                     ui.label(
                         RichText::new(format!("REC {mins:02}:{rem:04.1}"))
+                            .small()
                             .monospace()
                             .strong()
                             .color(if recording {
@@ -1779,10 +2246,10 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     );
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 ui.vertical(|ui| {
                     ui.label(
-                        RichText::new("MAIN L/R")
+                        RichText::new("MAIN")
                             .small()
                             .strong()
                             .monospace()
@@ -1790,18 +2257,39 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     );
                     draw_wing_vertical_meter(
                         ui,
-                        Vec2::new(34.0, 122.0),
+                        Vec2::new(26.0, 114.0),
                         ctx.state.meters.master_left,
                         ctx.state.meters.master_right,
                         ctx.state.peak_hold_master[0],
                         ctx.state.peak_hold_master[1],
                     );
                 });
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("VMIC")
+                            .small()
+                            .strong()
+                            .monospace()
+                            .color(if vmic_active {
+                                StudioPalette::ACCENT_EMERALD
+                            } else {
+                                StudioPalette::TEXT_MUTED
+                            }),
+                    );
+                    draw_wing_vertical_meter(
+                        ui,
+                        Vec2::new(22.0, 114.0),
+                        ctx.state.meters.virtual_mic_left,
+                        ctx.state.meters.virtual_mic_right,
+                        ctx.state.peak_hold_vmic[0],
+                        ctx.state.peak_hold_vmic[1],
+                    );
+                });
             });
 
-            ui.add_space(8.0);
-            ui.separator();
             ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
 
             let m = ctx.mixer.master().clone();
             let mut fader_db = m.fader_db;
@@ -1824,11 +2312,12 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                 }
 
                 ui.vertical(|ui| {
-                    if draw_console_switch(ui, "DIM", dim, StudioPalette::ACCENT_AMBER, Vec2::new(66.0, 22.0)) {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    if draw_console_switch(ui, "DIM", dim, StudioPalette::ACCENT_AMBER, Vec2::new(64.0, 21.0)) {
                         dim = !dim;
                         changed = true;
                     }
-                    if draw_console_switch(ui, "MUTE", mute, StudioPalette::ACCENT_CRIMSON, Vec2::new(66.0, 22.0)) {
+                    if draw_console_switch(ui, "MUTE", mute, StudioPalette::ACCENT_CRIMSON, Vec2::new(64.0, 21.0)) {
                         mute = !mute;
                         changed = true;
                     }
@@ -1838,7 +2327,7 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         t.mixer_clear_solo,
                         any_solo,
                         StudioPalette::ACCENT_AMBER,
-                        Vec2::new(66.0, 22.0),
+                        Vec2::new(64.0, 21.0),
                     ) && any_solo
                     {
                         ctx.mixer.clear_all_solos();
@@ -1860,6 +2349,8 @@ fn render_fader_bank(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
         .iter()
         .filter(|c| c.dsp.record_arm)
         .count();
+    let outer_w = ui.available_width().max(220.0);
+    ui.set_max_width(outer_w);
 
     egui::Frame::new()
         .fill(Color32::from_rgb(13, 15, 20))
@@ -1867,6 +2358,8 @@ fn render_fader_bank(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
         .corner_radius(CornerRadius::same(3))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
+            let bank_inner_w = ui.available_width().max(200.0);
+            ui.set_max_width(bank_inner_w);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(t.mixer_bank_title)
@@ -1960,50 +2453,49 @@ fn render_fader_bank(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                     }
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("▶").clicked() {
-                        let next = (ctx.state.last_fader_scroll_x + 280.0)
-                            .min(ctx.state.last_fader_max_scroll_x);
-                        ctx.state.pending_fader_scroll_x = Some(next);
-                    }
-                    if ui.small_button("◀").clicked() {
-                        let prev = (ctx.state.last_fader_scroll_x - 280.0).max(0.0);
-                        ctx.state.pending_fader_scroll_x = Some(prev);
-                    }
-                    if count > 8 {
-                        let pages = count.div_ceil(8);
-                        for p_idx in (0..pages).rev() {
-                            let start = p_idx * 8 + 1;
-                            let end = ((p_idx + 1) * 8).min(count);
-                            let target_x = (p_idx as f32) * 8.0 * 106.0;
-                            if ui.small_button(format!("{start}-{end}")).clicked() {
-                                ctx.state.pending_fader_scroll_x =
-                                    Some(target_x.min(ctx.state.last_fader_max_scroll_x));
-                            }
+                if count > 8 {
+                    let pages = count.div_ceil(8);
+                    for p_idx in 0..pages {
+                        let start = p_idx * 8 + 1;
+                        let end = ((p_idx + 1) * 8).min(count);
+                        let target_x = (p_idx as f32) * 8.0 * 102.0;
+                        if ui.small_button(format!("{start}-{end}")).clicked() {
+                            ctx.state.pending_fader_scroll_x =
+                                Some(target_x.min(ctx.state.last_fader_max_scroll_x));
                         }
                     }
-                });
+                }
+                if ui.small_button("◀").clicked() {
+                    let prev = (ctx.state.last_fader_scroll_x - 260.0).max(0.0);
+                    ctx.state.pending_fader_scroll_x = Some(prev);
+                }
+                if ui.small_button("▶").clicked() {
+                    let next = (ctx.state.last_fader_scroll_x + 260.0)
+                        .min(ctx.state.last_fader_max_scroll_x);
+                    ctx.state.pending_fader_scroll_x = Some(next);
+                }
             });
 
             ui.add_space(6.0);
             let avail_w = ui.available_width();
-            let pin_master = avail_w >= 480.0;
+            let pin_master = avail_w >= 460.0;
 
             if pin_master {
-                let bank_w = (avail_w - 122.0).max(200.0);
+                let bank_w = (avail_w - 126.0).max(160.0).floor();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
                         Vec2::new(bank_w, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            render_scrollable_channels(ui, ctx, false);
+                            ui.set_max_width(bank_w);
+                            render_scrollable_channels(ui, ctx, false, bank_w);
                         },
                     );
                     ui.separator();
                     render_wing_master_strip(ui, ctx);
                 });
             } else {
-                render_scrollable_channels(ui, ctx, true);
+                render_scrollable_channels(ui, ctx, true, avail_w.max(160.0));
             }
         });
 }
@@ -2012,9 +2504,11 @@ fn render_scrollable_channels(
     ui: &mut egui::Ui,
     ctx: &mut MixerPanelContext<'_>,
     include_master: bool,
+    max_w: f32,
 ) {
     let mut h_area = egui::ScrollArea::horizontal()
         .id_salt("wing_fader_bank_hscroll")
+        .max_width(max_w)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .auto_shrink([false, true]);
     if let Some(target_x) = ctx.state.pending_fader_scroll_x.take() {
@@ -2125,6 +2619,8 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
     let mut dsp_changed = false;
     let mut pending_input: Option<ChannelInputSource> = None;
     let mut pending_color: Option<[u8; 3]> = None;
+    let mut pending_icon: Option<ChannelIcon> = None;
+    let mut pending_pick_custom_icon = false;
     let mut pending_load_media = false;
     let mut pending_remove = false;
 
@@ -2146,13 +2642,14 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
             border_col,
         ))
         .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::same(6))
+        .inner_margin(Margin::same(5))
         .show(ui, |ui| {
-            ui.set_width(86.0);
-            ui.vertical_centered(|ui| {
+            ui.set_min_width(82.0);
+            ui.set_max_width(82.0);
+            ui.vertical(|ui| {
                 let scribble_bg = Color32::from_rgb(13, 16, 22);
                 let (scr_rect, scr_resp) =
-                    ui.allocate_exact_size(Vec2::new(82.0, 44.0), Sense::click());
+                    ui.allocate_exact_size(Vec2::new(82.0, 48.0), Sense::click());
                 if scr_resp.clicked() {
                     ctx.state.selection = WingSelection::Channel(idx);
                 }
@@ -2162,12 +2659,14 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                 scr_resp.context_menu(|ui| {
                     show_channel_context_menu(
                         ui,
-                        t,
+                        ctx.lang,
                         &ch,
                         ch_count,
                         ctx.input_devices,
                         &mut pending_input,
                         &mut pending_color,
+                        &mut pending_icon,
+                        &mut pending_pick_custom_icon,
                         &mut pending_load_media,
                         &mut pending_remove,
                         &mut dsp,
@@ -2190,11 +2689,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     Stroke::new(1.0_f32, strip_accent),
                     StrokeKind::Inside,
                 );
-                let top_txt = if is_media {
-                    format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7))
-                } else {
-                    format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7))
-                };
+                let top_txt = format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7));
                 p.text(
                     Pos2::new(scr_rect.center().x, scr_rect.top() + 7.0),
                     Align2::CENTER_CENTER,
@@ -2208,48 +2703,76 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     }
                     ChannelInputMode::Multimedia => {
                         if ch.media.loading {
-                            ("LOADING...".to_string(), StudioPalette::ACCENT_AMBER)
+                            ("LOAD..".to_string(), StudioPalette::ACCENT_AMBER)
                         } else if ch.media.total_frames > 0 {
                             let cur_s = ch.media.current_frame as f64
                                 / ch.media.sample_rate.max(1) as f64;
                             let icon = if ch.media.playing { ">" } else { "||" };
                             (
-                                format!("{} {}", icon, format_media_time(cur_s)),
+                                format!("{}{}", icon, format_media_time(cur_s)),
                                 StudioPalette::ACCENT_CYAN,
                             )
                         } else {
-                            ("MEDIA --".to_string(), StudioPalette::ACCENT_CYAN)
+                            ("MEDIA".to_string(), StudioPalette::ACCENT_CYAN)
                         }
                     }
                     mode => (
                         format!(
                             "{} {}",
-                            truncate_chars(&ch.source.device_label, 6),
+                            truncate_chars(&ch.source.device_label, 5),
                             format_input_mode_short(mode)
                         ),
                         accent,
                     ),
                 };
-                p.text(
-                    Pos2::new(scr_rect.center().x, scr_rect.top() + 28.5),
-                    Align2::CENTER_CENTER,
-                    src_lbl,
-                    FontId::monospace(9.0),
-                    src_col,
-                );
+
+                if ch.icon != ChannelIcon::None {
+                    let ic_rect = Rect::from_min_size(
+                        Pos2::new(scr_rect.left() + 4.0, scr_rect.top() + 19.0),
+                        Vec2::new(22.0, 22.0),
+                    );
+                    draw_channel_icon(ui, ctx.state, ic_rect, &ch.icon, strip_accent);
+                    ui.painter().text(
+                        Pos2::new(scr_rect.left() + 54.0, scr_rect.top() + 30.0),
+                        Align2::CENTER_CENTER,
+                        truncate_chars(&src_lbl, 7),
+                        FontId::monospace(8.5),
+                        src_col,
+                    );
+                } else {
+                    ui.painter().text(
+                        Pos2::new(scr_rect.center().x, scr_rect.top() + 30.0),
+                        Align2::CENTER_CENTER,
+                        src_lbl,
+                        FontId::monospace(9.0),
+                        src_col,
+                    );
+                }
 
                 ui.add_space(3.0);
                 if is_media {
+                    let has_track = ch.media.total_frames > 0 && !ch.media.loading;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        let has_track = ch.media.total_frames > 0 && !ch.media.loading;
+                        if draw_console_switch(
+                            ui,
+                            "-10",
+                            false,
+                            Color32::from_rgb(70, 82, 104),
+                            Vec2::new(26.0, 18.0),
+                        ) && has_track
+                        {
+                            let out = (!ctx.state.selected_output.is_empty())
+                                .then_some(ctx.state.selected_output.as_str());
+                            let _ = ctx.mixer.seek_media_relative_seconds(idx, -10.0, out);
+                        }
                         let play_lbl = if ch.media.playing { "||" } else { ">" };
                         if draw_console_switch(
                             ui,
                             play_lbl,
                             ch.media.playing,
                             StudioPalette::ACCENT_EMERALD,
-                            Vec2::new(20.0, 19.0),
+                            Vec2::new(26.0, 18.0),
                         ) && has_track
                         {
                             if !ctx.mixer.is_audio_running() && !ch.media.playing {
@@ -2273,10 +2796,26 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         }
                         if draw_console_switch(
                             ui,
+                            "+10",
+                            false,
+                            Color32::from_rgb(70, 82, 104),
+                            Vec2::new(26.0, 18.0),
+                        ) && has_track
+                        {
+                            let out = (!ctx.state.selected_output.is_empty())
+                                .then_some(ctx.state.selected_output.as_str());
+                            let _ = ctx.mixer.seek_media_relative_seconds(idx, 10.0, out);
+                        }
+                    });
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        if draw_console_switch(
+                            ui,
                             "[]",
                             false,
                             Color32::from_rgb(80, 90, 110),
-                            Vec2::new(19.0, 19.0),
+                            Vec2::new(26.0, 18.0),
                         ) && has_track
                         {
                             let out = (!ctx.state.selected_output.is_empty())
@@ -2294,7 +2833,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                             "LP",
                             ch.media.looping,
                             WingColors::WING_ORANGE,
-                            Vec2::new(19.0, 19.0),
+                            Vec2::new(26.0, 18.0),
                         ) {
                             let out = (!ctx.state.selected_output.is_empty())
                                 .then_some(ctx.state.selected_output.as_str());
@@ -2311,7 +2850,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                             "...",
                             ch.media.total_frames == 0,
                             StudioPalette::ACCENT_CYAN,
-                            Vec2::new(20.0, 19.0),
+                            Vec2::new(26.0, 18.0),
                         ) {
                             pending_load_media = true;
                         }
@@ -2325,7 +2864,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     },
                     ch.source.mode != ChannelInputMode::Unassigned,
                     StudioPalette::ACCENT_CYAN,
-                    Vec2::new(80.0, 19.0),
+                    Vec2::new(82.0, 19.0),
                 ) {
                     ctx.state.selection = WingSelection::Channel(idx);
                     ctx.state.active_tab = WingScreenTab::Source;
@@ -2333,8 +2872,8 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    let fx_col = if vst_count > 0 {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let fx_col = if vst_count > 0 && !dsp.fx_bypass {
                         StudioPalette::ACCENT_PURPLE
                     } else {
                         Color32::from_rgb(56, 62, 76)
@@ -2342,15 +2881,16 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     if draw_console_switch(
                         ui,
                         &format!("FX:{vst_count}"),
-                        vst_count > 0,
+                        vst_count > 0 && !dsp.fx_bypass,
                         fx_col,
-                        Vec2::new(42.0, 18.0),
+                        Vec2::new(40.0, 18.0),
                     ) {
                         ctx.state.selection = WingSelection::Channel(idx);
                         ctx.state.active_tab = WingScreenTab::Vst;
                     }
                     let eq_on = dsp.eq_enabled
                         && (dsp.hpf_enabled
+                            || dsp.lpf_enabled
                             || dsp.eq_bands.iter().any(|b| b.enabled && b.gain_db.abs() >= 0.05));
                     let dyn_col = if dsp.comp_enabled || dsp.gate_enabled {
                         WingColors::WING_ORANGE
@@ -2362,7 +2902,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         "DSP",
                         eq_on || dsp.comp_enabled || dsp.gate_enabled,
                         dyn_col,
-                        Vec2::new(36.0, 18.0),
+                        Vec2::new(40.0, 18.0),
                     ) {
                         ctx.state.selection = WingSelection::Channel(idx);
                         ctx.state.active_tab = WingScreenTab::Eq;
@@ -2377,7 +2917,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         rec_lbl,
                         dsp.record_arm,
                         StudioPalette::ACCENT_CRIMSON,
-                        Vec2::new(80.0, 21.0),
+                        Vec2::new(82.0, 21.0),
                     )
                 });
                 let rec_clicked = rec_row.inner;
@@ -2389,13 +2929,13 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing.x = 2.0;
                     if draw_console_switch(
                         ui,
                         "SOLO",
                         dsp.solo,
                         StudioPalette::ACCENT_AMBER,
-                        Vec2::new(38.0, 20.0),
+                        Vec2::new(40.0, 20.0),
                     ) {
                         dsp.solo = !dsp.solo;
                         dsp_changed = true;
@@ -2405,7 +2945,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         "MUTE",
                         dsp.mute,
                         StudioPalette::ACCENT_CRIMSON,
-                        Vec2::new(38.0, 20.0),
+                        Vec2::new(40.0, 20.0),
                     ) {
                         dsp.mute = !dsp.mute;
                         dsp_changed = true;
@@ -2414,13 +2954,13 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
 
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    if draw_wing_fader(ui, ("wing_fader", idx), &mut dsp.fader_db, strip_accent, 165.0) {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if draw_wing_fader(ui, ("wing_fader", idx), &mut dsp.fader_db, strip_accent, 160.0) {
                         dsp_changed = true;
                     }
                     draw_wing_vertical_meter(
                         ui,
-                        Vec2::new(20.0, 165.0),
+                        Vec2::new(24.0, 160.0),
                         meter.out_left,
                         meter.out_right,
                         hold[0],
@@ -2428,17 +2968,20 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     );
                 });
 
-                ui.add_space(4.0);
+                ui.add_space(3.0);
                 let db_txt = if dsp.fader_db <= -59.5 {
                     "-inf dB".to_string()
                 } else {
                     format!("{:+.1} dB", dsp.fader_db)
                 };
-                ui.label(
-                    RichText::new(db_txt)
-                        .small()
-                        .monospace()
-                        .color(StudioPalette::TEXT_SECONDARY),
+                ui.add_sized(
+                    Vec2::new(82.0, 16.0),
+                    egui::Label::new(
+                        RichText::new(db_txt)
+                            .small()
+                            .monospace()
+                            .color(StudioPalette::TEXT_SECONDARY),
+                    ),
                 );
 
                 if draw_console_switch(
@@ -2446,7 +2989,7 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     "SEL",
                     selected,
                     StudioPalette::ACCENT_CYAN,
-                    Vec2::new(78.0, 22.0),
+                    Vec2::new(82.0, 22.0),
                 ) {
                     ctx.state.selection = WingSelection::Channel(idx);
                 }
@@ -2462,12 +3005,14 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
     frame_resp.context_menu(|ui| {
         show_channel_context_menu(
             ui,
-            t,
+            ctx.lang,
             &ch,
             ch_count,
             ctx.input_devices,
             &mut pending_input,
             &mut pending_color,
+            &mut pending_icon,
+            &mut pending_pick_custom_icon,
             &mut pending_load_media,
             &mut pending_remove,
             &mut dsp,
@@ -2479,6 +3024,16 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
 
     if let Some(color) = pending_color {
         ctx.mixer.set_channel_color(idx, color);
+    }
+    if let Some(icon) = pending_icon {
+        ctx.mixer.set_channel_icon(idx, icon);
+    }
+    if pending_pick_custom_icon {
+        if let Some(img_path) = pick_custom_icon_dialog() {
+            ctx.state.custom_icon_textures.remove(&img_path);
+            ctx.mixer
+                .set_channel_icon(idx, ChannelIcon::CustomImage(img_path));
+        }
     }
     if dsp_changed {
         ctx.mixer.set_channel_dsp(idx, dsp);
@@ -2508,6 +3063,8 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
     let vst_count = m.inserts.iter().filter(|s| s.meta.is_some()).count();
     let any_solo = ctx.mixer.channels().iter().any(|c| c.dsp.solo);
     let armed_count = ctx.mixer.channels().iter().filter(|c| c.dsp.record_arm).count();
+    let vmic_active = ctx.mixer.is_virtual_mic_active();
+    let mut pending_toggle_vmic = false;
 
     egui::Frame::new()
         .fill(if selected {
@@ -2524,12 +3081,13 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
             },
         ))
         .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::same(6))
+        .inner_margin(Margin::same(5))
         .show(ui, |ui| {
-            ui.set_width(96.0);
-            ui.vertical_centered(|ui| {
+            ui.set_min_width(88.0);
+            ui.set_max_width(88.0);
+            ui.vertical(|ui| {
                 let (scr_rect, scr_resp) =
-                    ui.allocate_exact_size(Vec2::new(92.0, 44.0), Sense::click());
+                    ui.allocate_exact_size(Vec2::new(88.0, 48.0), Sense::click());
                 if scr_resp.clicked() {
                     ctx.state.selection = WingSelection::Master;
                 }
@@ -2554,11 +3112,15 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     Color32::from_rgb(12, 14, 20),
                 );
                 p.text(
-                    Pos2::new(scr_rect.center().x, scr_rect.top() + 28.5),
+                    Pos2::new(scr_rect.center().x, scr_rect.top() + 30.0),
                     Align2::CENTER_CENTER,
-                    "MASTER BUS",
+                    if vmic_active { "VMIC LIVE" } else { "MASTER BUS" },
                     FontId::monospace(9.0),
-                    WingColors::WING_ORANGE,
+                    if vmic_active {
+                        StudioPalette::ACCENT_EMERALD
+                    } else {
+                        WingColors::WING_ORANGE
+                    },
                 );
 
                 ui.add_space(3.0);
@@ -2567,23 +3129,35 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     &format!("MASTER FX:{vst_count}"),
                     vst_count > 0,
                     StudioPalette::ACCENT_PURPLE,
-                    Vec2::new(90.0, 19.0),
+                    Vec2::new(88.0, 18.0),
                 ) {
                     ctx.state.selection = WingSelection::Master;
                     ctx.state.active_tab = WingScreenTab::Vst;
                 }
 
                 ui.add_space(3.0);
-                if draw_console_switch(
-                    ui,
-                    &format!("REC:{armed_count} CH"),
-                    armed_count > 0,
-                    StudioPalette::ACCENT_CRIMSON,
-                    Vec2::new(90.0, 18.0),
-                ) {
-                    ctx.state.selection = WingSelection::Master;
-                    ctx.state.active_tab = WingScreenTab::IoRec;
-                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if draw_console_switch(
+                        ui,
+                        &format!("REC:{armed_count}"),
+                        armed_count > 0,
+                        StudioPalette::ACCENT_CRIMSON,
+                        Vec2::new(43.0, 18.0),
+                    ) {
+                        ctx.state.selection = WingSelection::Master;
+                        ctx.state.active_tab = WingScreenTab::IoRec;
+                    }
+                    if draw_console_switch(
+                        ui,
+                        "VMIC",
+                        vmic_active,
+                        StudioPalette::ACCENT_EMERALD,
+                        Vec2::new(43.0, 18.0),
+                    ) {
+                        pending_toggle_vmic = true;
+                    }
+                });
 
                 ui.add_space(3.0);
                 if draw_console_switch(
@@ -2591,7 +3165,7 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     "CLR SOLO",
                     any_solo,
                     StudioPalette::ACCENT_AMBER,
-                    Vec2::new(90.0, 21.0),
+                    Vec2::new(88.0, 21.0),
                 ) && any_solo
                 {
                     ctx.mixer.clear_all_solos();
@@ -2599,7 +3173,7 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.spacing_mut().item_spacing.x = 2.0;
                     if draw_console_switch(
                         ui,
                         "DIM",
@@ -2624,13 +3198,19 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
 
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if draw_wing_fader(ui, ("wing_fader_master", 0_usize), &mut fader_db, WingColors::WING_ORANGE, 165.0) {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if draw_wing_fader(
+                        ui,
+                        ("wing_fader_master", 0_usize),
+                        &mut fader_db,
+                        WingColors::WING_ORANGE,
+                        160.0,
+                    ) {
                         changed = true;
                     }
                     draw_wing_vertical_meter(
                         ui,
-                        Vec2::new(24.0, 165.0),
+                        Vec2::new(26.0, 160.0),
                         ctx.state.meters.master_left,
                         ctx.state.meters.master_right,
                         ctx.state.peak_hold_master[0],
@@ -2638,17 +3218,20 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     );
                 });
 
-                ui.add_space(4.0);
+                ui.add_space(3.0);
                 let db_txt = if fader_db <= -59.5 {
                     "-inf dB".to_string()
                 } else {
                     format!("{:+.1} dB", fader_db)
                 };
-                ui.label(
-                    RichText::new(db_txt)
-                        .small()
-                        .monospace()
-                        .color(WingColors::WING_ORANGE),
+                ui.add_sized(
+                    Vec2::new(88.0, 16.0),
+                    egui::Label::new(
+                        RichText::new(db_txt)
+                            .small()
+                            .monospace()
+                            .color(WingColors::WING_ORANGE),
+                    ),
                 );
 
                 if draw_console_switch(
@@ -2666,17 +3249,22 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
     if changed {
         ctx.mixer.set_master(fader_db, mute, dim, m.record_mix);
     }
+    if pending_toggle_vmic {
+        toggle_virtual_mic(ctx);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn show_channel_context_menu(
     ui: &mut egui::Ui,
-    t: &Strings,
+    lang: Lang,
     ch: &MixerChannelState,
     ch_count: usize,
     input_devices: &[AudioDeviceInfo],
     pending_input: &mut Option<ChannelInputSource>,
     pending_color: &mut Option<[u8; 3]>,
+    pending_icon: &mut Option<ChannelIcon>,
+    pending_pick_custom_icon: &mut bool,
     pending_load_media: &mut bool,
     pending_remove: &mut bool,
     dsp: &mut ChannelDspConfig,
@@ -2684,6 +3272,7 @@ fn show_channel_context_menu(
     selection: &mut WingSelection,
     active_tab: &mut WingScreenTab,
 ) {
+    let t = lang.text();
     ui.label(
         RichText::new(format!("CH {:02} · {}", ch.index + 1, ch.name))
             .strong()
@@ -2697,6 +3286,22 @@ fn show_channel_context_menu(
         .clicked()
     {
         dsp.record_arm = !dsp.record_arm;
+        *dsp_changed = true;
+        ui.close();
+    }
+    if ui
+        .selectable_label(ch.dsp.send_to_virtual_mic, t.mixer_vmic_send_ch)
+        .clicked()
+    {
+        dsp.send_to_virtual_mic = !dsp.send_to_virtual_mic;
+        *dsp_changed = true;
+        ui.close();
+    }
+    if ui
+        .selectable_label(ch.dsp.solo_safe, t.mixer_solo_safe)
+        .clicked()
+    {
+        dsp.solo_safe = !dsp.solo_safe;
         *dsp_changed = true;
         ui.close();
     }
@@ -2721,6 +3326,25 @@ fn show_channel_context_menu(
         *pending_load_media = true;
         ui.close();
     }
+
+    ui.separator();
+    ui.menu_button(t.mixer_icon_label, |ui| {
+        for preset in ChannelIcon::presets() {
+            let sel = &ch.icon == preset;
+            if ui
+                .selectable_label(sel, channel_icon_name(preset, lang))
+                .clicked()
+            {
+                *pending_icon = Some(preset.clone());
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(t.mixer_icon_custom).clicked() {
+            *pending_pick_custom_icon = true;
+            ui.close();
+        }
+    });
 
     ui.separator();
     if ui
@@ -2777,7 +3401,7 @@ fn show_channel_context_menu(
 
     ui.separator();
     ui.label(RichText::new(t.mixer_channel_color).small().color(StudioPalette::TEXT_SECONDARY));
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for rgb in WING_PALETTE_SWATCHES {
             let swatch = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
             let (r, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
@@ -3050,7 +3674,7 @@ fn draw_wing_vertical_meter(
 }
 
 fn draw_wing_eq_curve(ui: &mut egui::Ui, dsp: &ChannelDspConfig, sr: f32, height: f32) {
-    let w = ui.available_width().max(180.0);
+    let w = ui.available_width().max(120.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, height), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
@@ -3311,6 +3935,299 @@ fn toggle_mixer_recording(ctx: &mut MixerPanelContext<'_>) {
         }
         Err(e) => {
             *ctx.error = Some(e.to_string());
+        }
+    }
+}
+
+fn toggle_virtual_mic(ctx: &mut MixerPanelContext<'_>) {
+    if ctx.mixer.is_virtual_mic_active() {
+        ctx.mixer.disable_virtual_mic();
+        *ctx.status = StatusState::Plain(ctx.lang.text().mixer_vmic_toggle_off.to_string());
+        *ctx.error = None;
+        return;
+    }
+
+    if !ctx.mixer.is_audio_running() {
+        start_or_restart_mixer_audio(ctx);
+    }
+
+    match ctx.mixer.enable_virtual_mic(None) {
+        Ok(dev_name) => {
+            *ctx.status = StatusState::Plain(format!(
+                "{}: {}",
+                ctx.lang.text().mixer_vmic_toggle_on,
+                dev_name
+            ));
+            *ctx.error = None;
+        }
+        Err(e) => {
+            *ctx.error = Some(e.to_string());
+        }
+    }
+}
+
+fn channel_icon_name(icon: &ChannelIcon, lang: Lang) -> &'static str {
+    match lang {
+        Lang::Es => match icon {
+            ChannelIcon::None => "Sin icono",
+            ChannelIcon::Vocals => "Voz / Mic",
+            ChannelIcon::Guitar => "Guitarra",
+            ChannelIcon::Bass => "Bajo",
+            ChannelIcon::Drums => "Batería",
+            ChannelIcon::Keys => "Teclado",
+            ChannelIcon::Media => "Multimedia",
+            ChannelIcon::Strings => "Cuerdas",
+            ChannelIcon::Brass => "Vientos",
+            ChannelIcon::Broadcast => "Stream / Podcast",
+            ChannelIcon::Sfx => "FX / Sintetizador",
+            ChannelIcon::CustomImage(_) => "Imagen propia",
+        },
+        Lang::En => match icon {
+            ChannelIcon::None => "No icon",
+            ChannelIcon::Vocals => "Vocals / Mic",
+            ChannelIcon::Guitar => "Guitar",
+            ChannelIcon::Bass => "Bass",
+            ChannelIcon::Drums => "Drums",
+            ChannelIcon::Keys => "Keys",
+            ChannelIcon::Media => "Multimedia",
+            ChannelIcon::Strings => "Strings",
+            ChannelIcon::Brass => "Brass",
+            ChannelIcon::Broadcast => "Broadcast / Stream",
+            ChannelIcon::Sfx => "FX / Synth",
+            ChannelIcon::CustomImage(_) => "Custom image",
+        },
+    }
+}
+
+fn pick_custom_icon_dialog() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter(
+            "Image (PNG, JPG, WEBP, BMP, GIF)",
+            &["png", "jpg", "jpeg", "webp", "bmp", "gif"],
+        )
+        .pick_file()
+}
+
+fn load_custom_icon_color_image(path: &Path) -> Option<ColorImage> {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-i",
+        ])
+        .arg(path)
+        .args([
+            "-vf",
+            "scale=64:64:force_original_aspect_ratio=decrease,pad=64:64:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-",
+        ])
+        .output()
+        .ok()?;
+    if output.status.success() && output.stdout.len() == 64 * 64 * 4 {
+        return Some(ColorImage::from_rgba_unmultiplied([64, 64], &output.stdout));
+    }
+    None
+}
+
+fn draw_channel_icon(
+    ui: &mut egui::Ui,
+    state: &mut MixerUiState,
+    rect: Rect,
+    icon: &ChannelIcon,
+    tint: Color32,
+) {
+    let painter = ui.painter();
+    let c = rect.center();
+    let r = (rect.width().min(rect.height()) * 0.45).max(4.0);
+    let stroke = Stroke::new(1.3_f32, tint);
+    let thin = Stroke::new(1.0_f32, tint);
+
+    match icon {
+        ChannelIcon::None => {
+            painter.circle_stroke(c, r * 0.45, Stroke::new(1.0_f32, tint.gamma_multiply(0.5)));
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.35, c.y + r * 0.35), Pos2::new(c.x + r * 0.35, c.y - r * 0.35)],
+                Stroke::new(1.0_f32, tint.gamma_multiply(0.5)),
+            );
+        }
+        ChannelIcon::Vocals => {
+            let cap = Rect::from_center_size(Pos2::new(c.x, c.y - r * 0.25), Vec2::new(r * 0.72, r * 0.92));
+            painter.rect_stroke(cap, CornerRadius::same((r * 0.35) as u8), stroke, StrokeKind::Inside);
+            painter.line_segment(
+                [Pos2::new(cap.left(), cap.center().y), Pos2::new(cap.right(), cap.center().y)],
+                thin,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x, cap.bottom()), Pos2::new(c.x, c.y + r * 0.78)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.42, c.y + r * 0.78), Pos2::new(c.x + r * 0.42, c.y + r * 0.78)],
+                stroke,
+            );
+        }
+        ChannelIcon::Guitar => {
+            painter.circle_stroke(Pos2::new(c.x - r * 0.22, c.y + r * 0.25), r * 0.48, stroke);
+            painter.circle_filled(Pos2::new(c.x - r * 0.22, c.y + r * 0.25), r * 0.14, tint);
+            painter.line_segment(
+                [Pos2::new(c.x + r * 0.08, c.y - r * 0.05), Pos2::new(c.x + r * 0.75, c.y - r * 0.72)],
+                Stroke::new(1.8_f32, tint),
+            );
+            painter.rect_filled(
+                Rect::from_center_size(Pos2::new(c.x + r * 0.75, c.y - r * 0.72), Vec2::splat(r * 0.26)),
+                CornerRadius::same(1),
+                tint,
+            );
+        }
+        ChannelIcon::Bass => {
+            painter.circle_stroke(Pos2::new(c.x - r * 0.25, c.y + r * 0.25), r * 0.46, stroke);
+            painter.line_segment(
+                [Pos2::new(c.x + r * 0.04, c.y - r * 0.04), Pos2::new(c.x + r * 0.80, c.y - r * 0.80)],
+                Stroke::new(1.8_f32, tint),
+            );
+            for i in 0..2 {
+                let off = i as f32 * r * 0.18;
+                painter.circle_filled(Pos2::new(c.x + r * 0.58 + off, c.y - r * 0.76 + off), 1.4, tint);
+            }
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.42, c.y + r * 0.18), Pos2::new(c.x - r * 0.08, c.y + r * 0.36)],
+                thin,
+            );
+        }
+        ChannelIcon::Drums => {
+            let shell = Rect::from_center_size(Pos2::new(c.x, c.y + r * 0.22), Vec2::new(r * 1.35, r * 0.82));
+            painter.rect_stroke(shell, CornerRadius::same(2), stroke, StrokeKind::Inside);
+            painter.line_segment(
+                [Pos2::new(shell.left() + 2.0, shell.top()), Pos2::new(shell.center().x, shell.bottom())],
+                thin,
+            );
+            painter.line_segment(
+                [Pos2::new(shell.center().x, shell.bottom()), Pos2::new(shell.right() - 2.0, shell.top())],
+                thin,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.65, c.y - r * 0.65), Pos2::new(c.x + r * 0.25, c.y - r * 0.15)],
+                thin,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x + r * 0.65, c.y - r * 0.65), Pos2::new(c.x - r * 0.25, c.y - r * 0.15)],
+                thin,
+            );
+        }
+        ChannelIcon::Keys => {
+            let kb = Rect::from_center_size(c, Vec2::new(r * 1.5, r * 1.1));
+            painter.rect_stroke(kb, CornerRadius::same(2), stroke, StrokeKind::Inside);
+            for i in 1..4 {
+                let x = kb.left() + kb.width() * (i as f32 / 4.0);
+                painter.line_segment([Pos2::new(x, kb.top()), Pos2::new(x, kb.bottom())], thin);
+            }
+            for x_frac in [0.22_f32, 0.48, 0.76] {
+                let bx = kb.left() + kb.width() * x_frac;
+                let bk = Rect::from_min_size(
+                    Pos2::new(bx - r * 0.11, kb.top()),
+                    Vec2::new(r * 0.22, kb.height() * 0.56),
+                );
+                painter.rect_filled(bk, CornerRadius::ZERO, tint);
+            }
+        }
+        ChannelIcon::Media => {
+            painter.circle_stroke(c, r * 0.78, stroke);
+            let pts = vec![
+                Pos2::new(c.x - r * 0.22, c.y - r * 0.36),
+                Pos2::new(c.x - r * 0.22, c.y + r * 0.36),
+                Pos2::new(c.x + r * 0.38, c.y),
+            ];
+            painter.add(egui::Shape::convex_polygon(pts, tint, Stroke::NONE));
+        }
+        ChannelIcon::Strings => {
+            painter.circle_stroke(Pos2::new(c.x, c.y - r * 0.20), r * 0.36, stroke);
+            painter.circle_stroke(Pos2::new(c.x, c.y + r * 0.28), r * 0.48, stroke);
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - r * 0.82), Pos2::new(c.x, c.y + r * 0.65)],
+                thin,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.65, c.y + r * 0.10), Pos2::new(c.x + r * 0.65, c.y - r * 0.25)],
+                thin,
+            );
+        }
+        ChannelIcon::Brass => {
+            painter.line_segment(
+                [Pos2::new(c.x - r * 0.75, c.y + r * 0.10), Pos2::new(c.x + r * 0.25, c.y + r * 0.10)],
+                stroke,
+            );
+            let bell = vec![
+                Pos2::new(c.x + r * 0.20, c.y + r * 0.10),
+                Pos2::new(c.x + r * 0.75, c.y - r * 0.45),
+                Pos2::new(c.x + r * 0.75, c.y + r * 0.55),
+            ];
+            painter.add(egui::Shape::closed_line(bell, stroke));
+            for i in 0..3 {
+                let vx = c.x - r * 0.35 + i as f32 * r * 0.22;
+                painter.line_segment(
+                    [Pos2::new(vx, c.y + r * 0.10), Pos2::new(vx, c.y - r * 0.28)],
+                    thin,
+                );
+            }
+        }
+        ChannelIcon::Broadcast => {
+            painter.circle_filled(Pos2::new(c.x, c.y - r * 0.10), r * 0.20, tint);
+            painter.line_segment(
+                [Pos2::new(c.x, c.y + r * 0.10), Pos2::new(c.x - r * 0.35, c.y + r * 0.75)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x, c.y + r * 0.10), Pos2::new(c.x + r * 0.35, c.y + r * 0.75)],
+                stroke,
+            );
+            painter.circle_stroke(Pos2::new(c.x, c.y - r * 0.10), r * 0.52, thin);
+            painter.circle_stroke(Pos2::new(c.x, c.y - r * 0.10), r * 0.80, Stroke::new(0.9_f32, tint.gamma_multiply(0.65)));
+        }
+        ChannelIcon::Sfx => {
+            let pts = [
+                Pos2::new(c.x - r * 0.80, c.y),
+                Pos2::new(c.x - r * 0.45, c.y - r * 0.65),
+                Pos2::new(c.x - r * 0.10, c.y + r * 0.55),
+                Pos2::new(c.x + r * 0.28, c.y - r * 0.75),
+                Pos2::new(c.x + r * 0.58, c.y + r * 0.35),
+                Pos2::new(c.x + r * 0.82, c.y),
+            ];
+            for w in pts.windows(2) {
+                painter.line_segment([w[0], w[1]], stroke);
+            }
+        }
+        ChannelIcon::CustomImage(path) => {
+            if !state.custom_icon_textures.contains_key(path) {
+                let loaded = load_custom_icon_color_image(path).map(|img| {
+                    ui.ctx().load_texture(
+                        format!("custom_ch_icon_{}", path.display()),
+                        img,
+                        TextureOptions::LINEAR,
+                    )
+                });
+                state.custom_icon_textures.insert(path.clone(), loaded);
+            }
+            if let Some(Some(tex)) = state.custom_icon_textures.get(path) {
+                let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+                painter.image(tex.id(), rect.shrink(1.0), uv, Color32::WHITE);
+            } else {
+                painter.rect_stroke(rect.shrink(2.0), CornerRadius::same(2), stroke, StrokeKind::Inside);
+                painter.circle_filled(Pos2::new(c.x - r * 0.25, c.y - r * 0.22), r * 0.18, tint);
+                painter.line_segment(
+                    [Pos2::new(rect.left() + 3.0, rect.bottom() - 3.0), Pos2::new(c.x, c.y)],
+                    thin,
+                );
+                painter.line_segment(
+                    [Pos2::new(c.x, c.y), Pos2::new(rect.right() - 3.0, rect.bottom() - 3.0)],
+                    thin,
+                );
+            }
         }
     }
 }
