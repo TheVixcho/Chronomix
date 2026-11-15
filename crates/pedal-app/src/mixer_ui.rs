@@ -350,30 +350,73 @@ fn draw_wing_bezel_tab(
 
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
-        let bg = lerp_color(
-            lerp_color(Color32::from_rgb(20, 20, 24), Color32::from_rgb(32, 32, 38), hov_t),
-            Color32::from_rgb(42, 44, 52),
-            sel_t,
+        let pressed_offset = if resp.is_pointer_button_down_on() { 0.7 } else { 0.0 };
+        let socket_rect = rect.expand(0.8);
+        p.rect_filled(socket_rect, CornerRadius::same(3), Color32::from_rgb(7, 7, 9));
+        p.rect_stroke(
+            socket_rect,
+            CornerRadius::same(3),
+            Stroke::new(1.0_f32, Color32::from_rgb(18, 19, 24)),
+            StrokeKind::Inside,
         );
-        let stroke_col = lerp_color(
-            Color32::from_rgb(46, 46, 54),
-            Color32::from_rgb(180, 185, 195),
-            sel_t.max(hov_t * 0.5),
-        );
-        p.rect_filled(rect, CornerRadius::same(2), bg);
-        p.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0_f32, stroke_col), StrokeKind::Inside);
+
+        let btn_rect = rect.translate(Vec2::new(0.0, pressed_offset));
+        let off_body = Color32::from_rgb(22, 23, 28);
+        let hov_body = Color32::from_rgb(32, 34, 42);
+        let on_body = Color32::from_rgb(46, 48, 58);
+        let base_body = lerp_color(lerp_color(off_body, hov_body, hov_t), on_body, sel_t);
+        p.rect_filled(btn_rect, CornerRadius::same(3), base_body);
 
         if sel_t > 0.02 {
+            let core_rect = Rect::from_center_size(
+                btn_rect.center(),
+                Vec2::new(btn_rect.width() * 0.7, btn_rect.height() * 0.55),
+            );
+            let alpha = (90.0 * sel_t).clamp(0.0, 110.0) as u8;
+            p.rect_filled(
+                core_rect,
+                CornerRadius::same(2),
+                Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+            );
+
             let led = Rect::from_min_size(
-                Pos2::new(rect.left() + 3.0, rect.top() + 4.0),
-                Vec2::new(3.0, rect.height() - 8.0),
+                Pos2::new(btn_rect.left() + 3.0, btn_rect.top() + 4.0),
+                Vec2::new(3.0, btn_rect.height() - 8.0),
             );
             p.rect_filled(led, CornerRadius::same(1), Color32::WHITE);
         }
 
+        let rim_alpha = if active { 110 } else { 32 };
+        p.line_segment(
+            [
+                Pos2::new(btn_rect.left() + 2.0, btn_rect.top() + 1.0),
+                Pos2::new(btn_rect.right() - 2.0, btn_rect.top() + 1.0),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, rim_alpha)),
+        );
+        p.line_segment(
+            [
+                Pos2::new(btn_rect.left() + 2.0, btn_rect.bottom() - 1.0),
+                Pos2::new(btn_rect.right() - 2.0, btn_rect.bottom() - 1.0),
+            ],
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 85)),
+        );
+
+        let stroke_col = lerp_color(
+            Color32::from_rgb(42, 45, 54),
+            Color32::from_rgb(180, 185, 195),
+            sel_t.max(hov_t * 0.5),
+        );
+        p.rect_stroke(
+            btn_rect,
+            CornerRadius::same(3),
+            Stroke::new(1.0_f32, stroke_col),
+            StrokeKind::Inside,
+        );
+
         let txt_col = lerp_color(StudioPalette::TEXT_SECONDARY, Color32::WHITE, sel_t.max(hov_t * 0.6));
         p.text(
-            rect.center(),
+            btn_rect.center(),
             Align2::CENTER_CENTER,
             label,
             FontId::monospace(10.0),
@@ -492,14 +535,14 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                 });
             });
 
-        if ui.small_button("<").clicked() {
+        if draw_console_switch(ui, "<", false, StudioPalette::ACCENT_CYAN, Vec2::new(18.0, 18.0)) {
             ctx.state.selection = match ctx.state.selection {
                 WingSelection::Channel(0) => WingSelection::Master,
                 WingSelection::Channel(i) => WingSelection::Channel(i - 1),
                 WingSelection::Master => WingSelection::Channel(ch_count.saturating_sub(1)),
             };
         }
-        if ui.small_button(">").clicked() {
+        if draw_console_switch(ui, ">", false, StudioPalette::ACCENT_CYAN, Vec2::new(18.0, 18.0)) {
             ctx.state.selection = match ctx.state.selection {
                 WingSelection::Channel(i) if i + 1 < ch_count => WingSelection::Channel(i + 1),
                 WingSelection::Channel(_) => WingSelection::Master,
