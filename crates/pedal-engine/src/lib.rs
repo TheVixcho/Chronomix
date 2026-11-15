@@ -520,6 +520,7 @@ impl PedalEngine {
             LoadedBackend::NativeVst2(plugin) => Some(ActivePluginHandle::NativeVst2 {
                 plugin: Arc::clone(plugin),
             }),
+            #[cfg(target_os = "linux")]
             LoadedBackend::Wine(wine) => Some(ActivePluginHandle::Wine {
                 channel: wine.audio_channel(),
             }),

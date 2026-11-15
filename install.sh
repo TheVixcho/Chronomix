@@ -39,6 +39,9 @@ install_linux() {
         cp "./target/release/${APP_NAME}" "${bin_dir}/${APP_NAME}"
     else
         local asset="Chronomix-Linux-x86_64.tar.gz"
+        if [ "${ARCH}" = "aarch64" ] || [ "${ARCH}" = "arm64" ]; then
+            asset="Chronomix-Linux-ARM64.tar.gz"
+        fi
         local url
         url="$(resolve_download_url "${asset}")"
         echo "-> Descargando ${url}..."

@@ -8,33 +8,26 @@
 
 ## Instalación Rápida
 
-### Windows (Instalador Oficial `.exe`)
-1. Descarga **`Chronomix-Setup-v0.0.1-Windows-x64.exe`** desde la sección de [Releases](https://github.com/TheVixcho/chronomix/releases/latest).
-2. Ejecuta el instalador, acepta la licencia **MIT (TheVixcho)** y marca la casilla **"Crear un icono en el escritorio"**.
+### Windows (Instalador Oficial `.exe` x64 y ARM64)
+1. Descarga **`Chronomix-Setup-Windows-x64.exe`** (PCs Intel/AMD) o **`Chronomix-Setup-Windows-ARM64.exe`** (Windows en ARM / Snapdragon) desde la sección de [Releases](https://github.com/TheVixcho/chronomix/releases/latest).
+2. Ejecuta el instalador, acepta la licencia **MIT (TheVixcho)** y confirma crear el **acceso directo en el Escritorio y Menú Inicio**.
 3. Abre **Chronomix** desde tu Escritorio o Menú Inicio.
 
-### Linux (Instalación en 1 Comando)
-Pega este comando en tu terminal para descargar, instalar el binario y crear el acceso directo en tu Escritorio y menú de aplicaciones:
+### Linux x86_64 y ARM64 (Instalación en 1 Comando)
+Pega este comando en tu terminal para descargar automáticamente el paquete correspondiente a tu arquitectura (`Chronomix-Linux-x86_64.tar.gz` o `Chronomix-Linux-ARM64.tar.gz`), instalar el binario y crear el acceso directo en tu Escritorio y menú de aplicaciones:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
 ```
 
-También puedes instalar el paquete `.deb` en Ubuntu / Debian / Linux Mint:
-
-```bash
-curl -fLO https://github.com/TheVixcho/chronomix/releases/latest/download/chronomix_latest_amd64.deb
-sudo dpkg -i chronomix_latest_amd64.deb
-```
-
-### macOS (Instalación en 1 Comando o `.dmg`)
+### macOS Apple Silicon / Intel (Instalación en 1 Comando o `.dmg`)
 Con un solo comando en la terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
 ```
 
-O descarga **`Chronomix-v0.0.1-macOS.dmg`** desde [Releases](https://github.com/TheVixcho/chronomix/releases/latest) y arrastra `Chronomix.app` a tu carpeta `Applications`.
+O descarga **`Chronomix-macOS.dmg`** desde [Releases](https://github.com/TheVixcho/chronomix/releases/latest) y arrastra `Chronomix.app` a tu carpeta `Applications`.
 
 ---
 
