@@ -14,6 +14,9 @@ use cpal::{
 use rtrb::{Consumer, Producer, RingBuffer};
 use thiserror::Error;
 
+pub mod mixer;
+pub use mixer::*;
+
 /// Errors returned by audio device enumeration or stream initialization.
 #[derive(Debug, Error)]
 pub enum AudioError {
@@ -303,7 +306,7 @@ fn disambiguate_duplicate_names(entries: &mut [AudioDeviceInfo]) {
     }
 }
 
-fn find_device(id_or_name: &str, is_input: bool) -> Result<Device, AudioError> {
+pub(crate) fn find_device(id_or_name: &str, is_input: bool) -> Result<Device, AudioError> {
     let host = cpal::default_host();
     let devices: Vec<Device> = if is_input {
         host.input_devices()
@@ -337,7 +340,7 @@ fn supported_configs(device: &Device, is_input: bool) -> Vec<cpal::SupportedStre
     }
 }
 
-fn resolve_buffer_size(
+pub(crate) fn resolve_buffer_size(
     device: &Device,
     is_input: bool,
     sample_rate: u32,
@@ -385,7 +388,7 @@ fn resolve_buffer_size(
     fallback.unwrap_or(BufferSize::Default)
 }
 
-fn pick_sample_rate(
+pub(crate) fn pick_sample_rate(
     device: &Device,
     is_input: bool,
     preferred: u32,

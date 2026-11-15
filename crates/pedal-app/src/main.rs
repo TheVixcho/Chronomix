@@ -1,4 +1,5 @@
 mod i18n;
+mod mixer_ui;
 mod theme;
 
 use std::{
@@ -16,10 +17,11 @@ use eframe::egui::{
     StrokeKind, Vec2,
 };
 use i18n::Lang;
+use mixer_ui::{MixerPanelContext, MixerUiState, render_mixer_panel};
 use pedal_audio::AudioDeviceInfo;
 use pedal_engine::{
-    LoadedPluginMeta, MeterSnapshot, PedalEngine, WineAction, WineBridgeMode, WineConfig,
-    WineEnvironmentStatus, initialize_wine_prefix, inspect_wine_environment,
+    LoadedPluginMeta, MeterSnapshot, MixerEngine, PedalEngine, WineAction, WineBridgeMode,
+    WineConfig, WineEnvironmentStatus, initialize_wine_prefix, inspect_wine_environment,
     launch_wine_executable, launch_wine_tool, rebuild_wine_bridge,
 };
 use theme::{
@@ -54,6 +56,7 @@ fn main() -> eframe::Result<()> {
 enum ActivePanel {
     News,
     Recording,
+    Mixer,
     Settings,
 }
 
@@ -111,7 +114,7 @@ impl AppSettings {
 }
 
 #[derive(Debug, Clone)]
-enum StatusState {
+pub(crate) enum StatusState {
     Ready,
     MonitoringStopped,
     Live {
@@ -208,6 +211,8 @@ struct ChronomixApp {
     show_wine_paths: bool,
 
     engine: PedalEngine,
+    mixer_engine: MixerEngine,
+    mixer_ui: MixerUiState,
     input_devices: Vec<AudioDeviceInfo>,
     output_devices: Vec<AudioDeviceInfo>,
     selected_input: String,
@@ -313,6 +318,10 @@ impl ChronomixApp {
         let selected_output =
             pick_best_default_device(&output_devices, engine.default_output_device(), false);
 
+        let mut mixer_engine = MixerEngine::new();
+        mixer_engine.set_wine_config(wine_config.clone());
+        let mixer_ui = MixerUiState::new(selected_output.clone(), mixer_engine.channels().len());
+
         let mut app = Self {
             theme_initialized: false,
             lang,
@@ -328,6 +337,8 @@ impl ChronomixApp {
             wine_busy_msg: None,
             show_wine_paths: false,
             engine,
+            mixer_engine,
+            mixer_ui,
             input_devices,
             output_devices,
             selected_input,
@@ -379,6 +390,7 @@ impl ChronomixApp {
 
     fn sync_and_save_wine_config(&mut self) {
         self.engine.set_wine_config(self.wine_config.clone());
+        self.mixer_engine.set_wine_config(self.wine_config.clone());
         self.save_settings();
         self.refresh_wine_status();
         if self.include_system_vst {
@@ -517,6 +529,8 @@ impl ChronomixApp {
             self.error = Some(ErrorState::SelectIo);
             return;
         }
+
+        self.mixer_engine.stop_audio();
 
         match self.engine.start_audio(
             &self.selected_input,
@@ -747,6 +761,12 @@ impl ChronomixApp {
                     "nav_tab_recording",
                 ),
                 (
+                    ActivePanel::Mixer,
+                    StudioIcon::Sliders,
+                    t.nav_mixer,
+                    "nav_tab_mixer",
+                ),
+                (
                     ActivePanel::Settings,
                     StudioIcon::Gear,
                     t.nav_settings,
@@ -842,7 +862,7 @@ impl ChronomixApp {
             ui.separator();
 
             // Status badges & language segmented control (wrapped inline so it never overlaps tabs on narrow Hyprland splits)
-            if self.engine.shared.is_recording() {
+            if self.engine.shared.is_recording() || self.mixer_engine.is_recording() {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_unmultiplied(239, 68, 68, 35))
                     .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_CRIMSON))
@@ -865,7 +885,7 @@ impl ChronomixApp {
                             );
                         });
                     });
-            } else if self.engine.is_audio_running() {
+            } else if self.engine.is_audio_running() || self.mixer_engine.is_audio_running() {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_unmultiplied(16, 185, 129, 30))
                     .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_EMERALD))
@@ -3049,11 +3069,42 @@ impl eframe::App for ChronomixApp {
         self.poll_scan();
         self.poll_wine_tasks();
         self.engine.service_plugin_window();
+        self.mixer_engine.service_all_plugin_windows();
+        let mixer_out = (!self.mixer_ui.selected_output.is_empty())
+            .then_some(self.mixer_ui.selected_output.clone());
+        if !self.mixer_engine.is_audio_running()
+            && self.engine.is_audio_running()
+            && self.mixer_engine.channels().iter().any(|c| c.media.loading)
+        {
+            self.engine.stop_audio();
+        }
+        for (ch_idx, res) in self.mixer_engine.poll_media_loads(mixer_out.as_deref()) {
+            match res {
+                Ok(title) => {
+                    let ch_name = self
+                        .mixer_engine
+                        .channel(ch_idx)
+                        .map(|c| c.name.clone())
+                        .unwrap_or_else(|| format!("CH {:02}", ch_idx + 1));
+                    self.status = StatusState::Plain(format!("{ch_name}: {title}"));
+                    self.error = None;
+                }
+                Err(msg) => {
+                    self.error = Some(ErrorState::Plain(msg));
+                }
+            }
+        }
         self.update_meters();
+        self.mixer_ui
+            .update_telemetry(self.mixer_engine.take_telemetry());
 
         // Keep meters and native plugin GUI smooth at 60 FPS only when active.
         if self.engine.is_audio_running()
             || self.engine.is_plugin_window_open()
+            || self.mixer_engine.is_audio_running()
+            || self.mixer_engine.any_insert_window_open()
+            || self.mixer_engine.is_recording()
+            || self.mixer_engine.channels().iter().any(|c| c.media.loading)
             || self.is_scanning
             || self.wine_busy_msg.is_some()
             || self.wine_status_refreshing
@@ -3107,7 +3158,9 @@ impl eframe::App for ChronomixApp {
                     } else {
                         let msg = self.status.format(lang);
                         let (dot_r, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                        let dot_col = if self.engine.is_audio_running() {
+                        let dot_col = if self.engine.is_audio_running()
+                            || self.mixer_engine.is_audio_running()
+                        {
                             StudioPalette::ACCENT_EMERALD
                         } else {
                             StudioPalette::ACCENT_CYAN
@@ -3124,7 +3177,17 @@ impl eframe::App for ChronomixApp {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(stats) = self.engine.audio_stats() {
+                        let active_stats = if self.active_panel == ActivePanel::Mixer
+                            && self.mixer_engine.is_audio_running()
+                        {
+                            self.mixer_engine.audio_stats()
+                        } else {
+                            self.engine
+                                .audio_stats()
+                                .cloned()
+                                .or_else(|| self.mixer_engine.audio_stats())
+                        };
+                        if let Some(stats) = active_stats {
                             let underruns = stats.output_underruns.load(Ordering::Relaxed);
                             let overruns = stats.input_overruns.load(Ordering::Relaxed);
                             ui.label(
@@ -3138,11 +3201,16 @@ impl eframe::App for ChronomixApp {
                 });
             });
 
+        let central_margin = if self.active_panel == ActivePanel::Mixer {
+            Margin::same(10)
+        } else {
+            Margin::same(16)
+        };
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(StudioPalette::BG_DEEP)
-                    .inner_margin(Margin::same(16)),
+                    .inner_margin(central_margin),
             )
             .show_inside(ui, |ui| match self.active_panel {
                 ActivePanel::News => self.render_news_panel(ui),
@@ -3156,6 +3224,40 @@ impl eframe::App for ChronomixApp {
                         ui.add_space(10.0);
                         self.render_vst_section(ui);
                     });
+                }
+                ActivePanel::Mixer => {
+                    let mut mixer_err: Option<String> =
+                        self.error.as_ref().map(|e| e.format(self.lang));
+                    let had_err_msg = mixer_err.clone();
+                    let mut wants_refresh_devices = false;
+                    {
+                        let engine = &mut self.engine;
+                        let mut stop_classic = || engine.stop_audio();
+                        let mut flag_refresh = || {
+                            wants_refresh_devices = true;
+                        };
+                        render_mixer_panel(
+                            ui,
+                            MixerPanelContext {
+                                lang: self.lang,
+                                mixer: &mut self.mixer_engine,
+                                state: &mut self.mixer_ui,
+                                input_devices: &self.input_devices,
+                                output_devices: &self.output_devices,
+                                discovered_plugins: &self.discovered_plugins,
+                                status: &mut self.status,
+                                error: &mut mixer_err,
+                                stop_classic_audio: &mut stop_classic,
+                                refresh_devices: &mut flag_refresh,
+                            },
+                        );
+                    }
+                    if mixer_err != had_err_msg {
+                        self.error = mixer_err.map(ErrorState::Plain);
+                    }
+                    if wants_refresh_devices {
+                        self.refresh_devices();
+                    }
                 }
                 ActivePanel::Settings => self.render_settings_panel(ui),
             });

@@ -294,7 +294,7 @@ mod linux_impl {
         process::{Child, Command, Stdio},
         sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
         time::{Duration, Instant},
     };
@@ -426,6 +426,8 @@ mod linux_impl {
         last_gui_poll: Mutex<Instant>,
     }
 
+    static WINE_INSTANCE_SEQ: AtomicU64 = AtomicU64::new(1);
+
     impl WineVst3Plugin {
         pub fn load(dll_path: &Path, sample_rate: f64, block_size: usize) -> Result<Self, WineError> {
             Self::load_with_config(dll_path, sample_rate, block_size, &WineConfig::default())
@@ -440,9 +442,11 @@ mod linux_impl {
             let (wine_bin, prefix) = ensure_prefix_ready_for_plugin(config)?;
             let (host_so, host_dir) = materialize_wine_host_files(config)?;
 
+            let seq = WINE_INSTANCE_SEQ.fetch_add(1, Ordering::Relaxed);
             let unique = format!(
-                "c-{}-{}",
+                "c-{}-{}-{}",
                 std::process::id(),
+                seq,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos() % 1_000_000_000)

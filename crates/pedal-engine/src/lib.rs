@@ -1,3 +1,5 @@
+pub mod mixer;
+pub use mixer::*;
 pub mod vst2;
 
 use std::{
@@ -153,7 +155,7 @@ impl SharedEngineState {
     }
 }
 
-fn db_to_linear(db: f32) -> f32 {
+pub(crate) fn db_to_linear(db: f32) -> f32 {
     if db <= -60.0 {
         0.0
     } else {
@@ -161,7 +163,7 @@ fn db_to_linear(db: f32) -> f32 {
     }
 }
 
-fn store_peak(target: &AtomicU32, peak: f32) {
+pub(crate) fn store_peak(target: &AtomicU32, peak: f32) {
     let clamped = if peak.is_finite() {
         peak.max(0.0)
     } else {
@@ -170,12 +172,13 @@ fn store_peak(target: &AtomicU32, peak: f32) {
     target.fetch_max(clamped.to_bits(), Ordering::Relaxed);
 }
 
-fn slice_peak(buf: &[f32]) -> f32 {
+pub(crate) fn slice_peak(buf: &[f32]) -> f32 {
     buf.iter()
         .fold(0.0_f32, |m, &s| if s.is_finite() { m.max(s.abs()) } else { m })
 }
 
-enum ActivePluginHandle {
+#[derive(Clone)]
+pub(crate) enum ActivePluginHandle {
     Native {
         plugin: Arc<Mutex<Plugin>>,
         in_channels: usize,
@@ -218,13 +221,6 @@ impl PedalDspProcessor {
         }
     }
 
-    fn ensure_wine_scratch(wet_l: &mut Vec<f32>, wet_r: &mut Vec<f32>, frames: usize) {
-        if wet_l.len() < frames {
-            wet_l.resize(frames, 0.0);
-            wet_r.resize(frames, 0.0);
-        }
-    }
-
     fn drain_commands(&mut self) {
         let budget = self.cmd_rx.buffer().capacity();
         for _ in 0..budget {
@@ -252,23 +248,7 @@ impl PedalDspProcessor {
                 }
                 EngineCommand::SetParam { id, value } => {
                     if let Some(ref handle) = self.active_plugin {
-                        match handle {
-                            ActivePluginHandle::Native { plugin, .. } => {
-                                if let Ok(mut p) = plugin.try_lock() {
-                                    let _ = p.set_parameter_at(id, value, 0);
-                                }
-                            }
-                            ActivePluginHandle::NativeVst2 { plugin } => {
-                                if let Ok(mut p) = plugin.try_lock() {
-                                    let _ = p.set_parameter(id, value);
-                                }
-                            }
-                            ActivePluginHandle::Wine { channel } => {
-                                if let Ok(mut ch) = channel.try_lock() {
-                                    ch.queue_param(id, value);
-                                }
-                            }
-                        }
+                        set_backend_param_live(handle, id, value);
                     }
                 }
                 EngineCommand::SetRecorder(tx) => {
@@ -347,83 +327,17 @@ impl StereoAudioProcessor for PedalDspProcessor {
 
         if !bypass {
             if let Some(ref handle) = self.active_plugin {
-                match handle {
-                    ActivePluginHandle::Native { plugin, .. } => {
-                        Self::prepare_vst_buffers(
-                            &mut self.vst_buffers,
-                            frames,
-                            sample_rate,
-                            &out_left[..frames],
-                            &out_right[..frames],
-                        );
-                        if let Ok(mut plugin) = plugin.try_lock() {
-                            if plugin.process_audio(&mut self.vst_buffers).is_ok() {
-                                let dry = 1.0 - mix;
-                                let out_chs = self.vst_buffers.outputs.len();
-                                for i in 0..frames {
-                                    let wet_l = if out_chs >= 1 {
-                                        self.vst_buffers.outputs[0][i]
-                                    } else {
-                                        out_left[i]
-                                    };
-                                    let wet_r = if out_chs >= 2 {
-                                        self.vst_buffers.outputs[1][i]
-                                    } else {
-                                        wet_l
-                                    };
-                                    out_left[i] = out_left[i] * dry + wet_l * mix;
-                                    out_right[i] = out_right[i] * dry + wet_r * mix;
-                                }
-                            }
-                        }
-                    }
-                    ActivePluginHandle::NativeVst2 { plugin } => {
-                        Self::ensure_wine_scratch(
-                            &mut self.wine_wet_l,
-                            &mut self.wine_wet_r,
-                            frames,
-                        );
-                        if let Ok(mut p) = plugin.try_lock() {
-                            if p.process_stereo(
-                                &out_left[..frames],
-                                &out_right[..frames],
-                                &mut self.wine_wet_l[..frames],
-                                &mut self.wine_wet_r[..frames],
-                                frames,
-                                sample_rate,
-                            ) {
-                                let dry = 1.0 - mix;
-                                for i in 0..frames {
-                                    out_left[i] = out_left[i] * dry + self.wine_wet_l[i] * mix;
-                                    out_right[i] = out_right[i] * dry + self.wine_wet_r[i] * mix;
-                                }
-                            }
-                        }
-                    }
-                    ActivePluginHandle::Wine { channel } => {
-                        Self::ensure_wine_scratch(
-                            &mut self.wine_wet_l,
-                            &mut self.wine_wet_r,
-                            frames,
-                        );
-                        if let Ok(mut ch) = channel.try_lock() {
-                            if ch.process_stereo(
-                                &out_left[..frames],
-                                &out_right[..frames],
-                                &mut self.wine_wet_l[..frames],
-                                &mut self.wine_wet_r[..frames],
-                                frames,
-                                sample_rate,
-                            ) {
-                                let dry = 1.0 - mix;
-                                for i in 0..frames {
-                                    out_left[i] = out_left[i] * dry + self.wine_wet_l[i] * mix;
-                                    out_right[i] = out_right[i] * dry + self.wine_wet_r[i] * mix;
-                                }
-                            }
-                        }
-                    }
-                }
+                process_active_handle(
+                    handle,
+                    &mut self.vst_buffers,
+                    &mut self.wine_wet_l,
+                    &mut self.wine_wet_r,
+                    &mut out_left[..frames],
+                    &mut out_right[..frames],
+                    frames,
+                    sample_rate,
+                    mix,
+                );
             }
         }
 
@@ -467,9 +381,10 @@ struct RecordingHandle {
     path: PathBuf,
 }
 
-enum LoadedBackend {
+pub(crate) enum LoadedBackend {
     Native(Arc<Mutex<Plugin>>),
     NativeVst2(Arc<Mutex<NativeVst2Plugin>>),
+    #[cfg(target_os = "linux")]
     Wine(WineVst3Plugin),
 }
 
@@ -689,191 +604,14 @@ impl PedalEngine {
         let requested_path = path.as_ref();
         self.unload_vst3_plugin();
 
-        if !requested_path.exists() {
-            return Err(EngineError::InvalidPluginPath(format!(
-                "Path does not exist: {}",
-                requested_path.display()
-            )));
-        }
-
-        if let Some(target) = pedal_wine::resolve_vst3_target(requested_path) {
-            #[cfg(target_os = "linux")]
-            match target.kind {
-                Vst3BinaryKind::WindowsPe64 => {
-                    return self.load_wine_vst3_plugin(&target.bundle_or_file, &target.binary_path);
-                }
-                Vst3BinaryKind::WindowsPe32 => {
-                    return Err(EngineError::Wine(WineError::UnsupportedArch32(
-                        target.bundle_or_file.display().to_string(),
-                    )));
-                }
-                Vst3BinaryKind::NativeElf | Vst3BinaryKind::Unknown => {}
-            }
-
-            let is_standalone_vst2 = is_vst2_extension(&target.bundle_or_file);
-            if is_standalone_vst2 {
-                if let Ok(meta) = self.load_native_vst2_plugin(&target.binary_path) {
-                    return Ok(meta);
-                }
-            }
-            return match self.load_native_vst3_plugin(&target.bundle_or_file) {
-                Ok(meta) => Ok(meta),
-                Err(vst3_err) => {
-                    if let Ok(meta) = self.load_native_vst2_plugin(&target.binary_path) {
-                        Ok(meta)
-                    } else {
-                        Err(vst3_err)
-                    }
-                }
-            };
-        }
-
-        if requested_path.is_dir() {
-            return Err(EngineError::InvalidPluginPath(format!(
-                "No VST2 (.dll/.so) or VST3 (.vst3) plugin found inside folder '{}'",
-                requested_path.display()
-            )));
-        }
-
-        if is_vst2_extension(requested_path) {
-            if let Ok(meta) = self.load_native_vst2_plugin(requested_path) {
-                return Ok(meta);
-            }
-        }
-
-        self.load_native_vst3_plugin(requested_path)
-    }
-
-    fn load_native_vst2_plugin(&mut self, path: &Path) -> Result<LoadedPluginMeta, EngineError> {
         let sr = self.sample_rate() as f64;
         let block = self.block_size;
+        let (backend, meta, handle) =
+            load_plugin_backend(requested_path, sr, block, &self.wine_config)?;
 
-        let vst2 = crate::vst2::NativeVst2Plugin::load(path, sr, block)
-            .map_err(EngineError::Vst2)?;
-        let info = vst2.info().clone();
-        let in_channels = vst2.input_channels();
-        let out_channels = vst2.output_channels().max(1);
-        let parameters = vst2.get_parameters();
-
-        let meta = LoadedPluginMeta {
-            info,
-            input_channels: in_channels,
-            output_channels: out_channels,
-            parameters,
-            is_wine_bridged: false,
-        };
-
-        let plugin_arc = Arc::new(Mutex::new(vst2));
-        self.loaded_backend = Some(LoadedBackend::NativeVst2(plugin_arc));
+        self.loaded_backend = Some(backend);
         self.loaded_meta = Some(meta.clone());
-        let handle = self.make_active_handle();
-        if let (Some(tx), Some(handle)) = (&mut self.cmd_tx, handle) {
-            let _ = tx.push(EngineCommand::SetPlugin(Some(handle)));
-        }
-
-        Ok(meta)
-    }
-
-    fn load_native_vst3_plugin(&mut self, path: &Path) -> Result<LoadedPluginMeta, EngineError> {
-        let sr = self.sample_rate() as f64;
-        let block = self.block_size;
-
-        let mut host = Vst3Host::builder()
-            .sample_rate(sr)
-            .block_size(block)
-            .input_channels(2)
-            .output_channels(2)
-            .build()?;
-
-        let mut plugin = host.load_plugin(path)?;
-        plugin.start_processing()?;
-
-        let layout = plugin.audio_bus_layout().ok();
-        let in_channels = layout
-            .as_ref()
-            .and_then(|l| l.inputs.first())
-            .map(|b| b.channel_count)
-            .unwrap_or(2);
-        let out_channels = layout
-            .as_ref()
-            .and_then(|l| l.outputs.first())
-            .map(|b| b.channel_count)
-            .unwrap_or(2)
-            .max(1);
-
-        let info = plugin.info().clone();
-        let parameters = collect_parameters(&plugin);
-
-        let meta = LoadedPluginMeta {
-            info,
-            input_channels: in_channels,
-            output_channels: out_channels,
-            parameters,
-            is_wine_bridged: false,
-        };
-
-        let plugin_arc = Arc::new(Mutex::new(plugin));
-        self.loaded_backend = Some(LoadedBackend::Native(plugin_arc));
-        self.loaded_meta = Some(meta.clone());
-        let handle = self.make_active_handle();
-        if let (Some(tx), Some(handle)) = (&mut self.cmd_tx, handle) {
-            let _ = tx.push(EngineCommand::SetPlugin(Some(handle)));
-        }
-
-        Ok(meta)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn load_wine_vst3_plugin(
-        &mut self,
-        requested_path: &Path,
-        dll_path: &Path,
-    ) -> Result<LoadedPluginMeta, EngineError> {
-        let sr = self.sample_rate() as f64;
-        let block = self.block_size;
-
-        let wine_plugin = WineVst3Plugin::load_with_config(dll_path, sr, block, &self.wine_config)?;
-        let wmeta = wine_plugin.metadata();
-        let fallback_name = requested_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Wine VST")
-            .to_string();
-
-        let info = PluginInfo {
-            path: requested_path.to_path_buf(),
-            name: if wmeta.name.is_empty() {
-                fallback_name
-            } else {
-                wmeta.name.clone()
-            },
-            vendor: if wmeta.vendor.is_empty() {
-                "Windows VST (Wine)".to_string()
-            } else {
-                wmeta.vendor.clone()
-            },
-            version: wmeta.version.clone(),
-            category: wmeta.category.clone(),
-            uid: format!("wine:{}", requested_path.display()),
-            audio_inputs: if wmeta.in_channels > 0 { 1 } else { 0 },
-            audio_outputs: if wmeta.out_channels > 0 { 1 } else { 0 },
-            has_midi_input: false,
-            has_midi_output: false,
-            has_gui: wmeta.has_gui,
-        };
-
-        let meta = LoadedPluginMeta {
-            info,
-            input_channels: wmeta.in_channels,
-            output_channels: wmeta.out_channels.max(1),
-            parameters: wine_params_to_display(&wmeta.params),
-            is_wine_bridged: true,
-        };
-
-        self.loaded_backend = Some(LoadedBackend::Wine(wine_plugin));
-        self.loaded_meta = Some(meta.clone());
-        let handle = self.make_active_handle();
-        if let (Some(tx), Some(handle)) = (&mut self.cmd_tx, handle) {
+        if let Some(ref mut tx) = self.cmd_tx {
             let _ = tx.push(EngineCommand::SetPlugin(Some(handle)));
         }
 
@@ -886,20 +624,7 @@ impl PedalEngine {
             let _ = tx.push(EngineCommand::SetPlugin(None));
         }
         if let Some(backend) = self.loaded_backend.take() {
-            match backend {
-                LoadedBackend::Native(plugin_arc) => {
-                    if let Ok(mut p) = plugin_arc.lock() {
-                        let _ = p.stop_processing();
-                    }
-                }
-                LoadedBackend::NativeVst2(plugin_arc) => {
-                    if let Ok(mut p) = plugin_arc.lock() {
-                        p.close_editor_window();
-                    }
-                }
-                #[cfg(target_os = "linux")]
-                LoadedBackend::Wine(_) => {}
-            }
+            unload_backend_resources(backend);
         }
         self.loaded_meta = None;
     }
@@ -915,65 +640,14 @@ impl PedalEngine {
             let _ = tx.push(EngineCommand::SetParam { id, value: val });
         }
         let backend = self.loaded_backend.as_ref()?;
-        let formatted = match backend {
-            LoadedBackend::Native(plugin_arc) => {
-                if let Ok(mut plugin) = plugin_arc.try_lock() {
-                    let _ = plugin.set_parameter(id, val);
-                    plugin
-                        .format_parameter(id, val)
-                        .unwrap_or_else(|_| format!("{:.2}", val))
-                } else {
-                    format!("{:.2}", val)
-                }
-            }
-            LoadedBackend::NativeVst2(plugin_arc) => {
-                if let Ok(mut plugin) = plugin_arc.try_lock() {
-                    plugin.set_parameter(id, val)
-                } else {
-                    format!("{:.2}", val)
-                }
-            }
-            #[cfg(target_os = "linux")]
-            LoadedBackend::Wine(wine) => wine
-                .set_parameter(id, val)
-                .unwrap_or_else(|_| format!("{:.2}", val)),
-        };
-
-        if let Some(ref mut meta) = self.loaded_meta {
-            if let Some(entry) = meta.parameters.iter_mut().find(|p| p.param.id == id) {
-                entry.param.value = val;
-                entry.formatted = formatted.clone();
-            }
-        }
-        Some(formatted)
+        let meta = self.loaded_meta.as_mut()?;
+        Some(set_backend_param_ui(backend, meta, id, val))
     }
 
     /// Refresh parameter values & display strings from the plugin (useful after native GUI edits).
     pub fn refresh_plugin_parameters(&mut self) {
-        let Some(ref backend) = self.loaded_backend else {
-            return;
-        };
-        let params = match backend {
-            LoadedBackend::Native(plugin_arc) => {
-                let Ok(plugin) = plugin_arc.try_lock() else {
-                    return;
-                };
-                collect_parameters(&plugin)
-            }
-            LoadedBackend::NativeVst2(plugin_arc) => {
-                let Ok(plugin) = plugin_arc.try_lock() else {
-                    return;
-                };
-                plugin.get_parameters()
-            }
-            #[cfg(target_os = "linux")]
-            LoadedBackend::Wine(wine) => match wine.get_parameters() {
-                Ok(p) => wine_params_to_display(&p),
-                Err(_) => return,
-            },
-        };
-        if let Some(ref mut meta) = self.loaded_meta {
-            meta.parameters = params;
+        if let (Some(backend), Some(meta)) = (&self.loaded_backend, &mut self.loaded_meta) {
+            refresh_backend_params_ui(backend, meta);
         }
     }
 
@@ -981,84 +655,22 @@ impl PedalEngine {
         let Some(ref backend) = self.loaded_backend else {
             return Ok(());
         };
-        match backend {
-            LoadedBackend::Native(plugin_arc) => {
-                if let Some(ref win) = self.plugin_window {
-                    if win.is_open() {
-                        return Ok(());
-                    }
-                }
-                let mut window = PluginWindow::new(Arc::clone(plugin_arc));
-                window.open()?;
-                self.plugin_window = Some(window);
-                Ok(())
-            }
-            LoadedBackend::NativeVst2(plugin_arc) => {
-                let mut plugin = plugin_arc
-                    .lock()
-                    .map_err(|_| EngineError::Vst2("VST2 mutex poisoned".into()))?;
-                plugin.open_editor_window().map_err(EngineError::Vst2)
-            }
-            #[cfg(target_os = "linux")]
-            LoadedBackend::Wine(wine) => {
-                wine.open_gui()?;
-                Ok(())
-            }
-        }
+        open_backend_gui(backend, &mut self.plugin_window)
     }
 
     pub fn close_plugin_window(&mut self) {
-        if let Some(mut win) = self.plugin_window.take() {
-            win.close();
-        }
-        match self.loaded_backend.as_ref() {
-            Some(LoadedBackend::NativeVst2(plugin_arc)) => {
-                if let Ok(mut plugin) = plugin_arc.lock() {
-                    plugin.close_editor_window();
-                }
-            }
-            #[cfg(target_os = "linux")]
-            Some(LoadedBackend::Wine(wine)) => {
-                wine.close_gui();
-            }
-            _ => {}
-        }
+        close_backend_gui(self.loaded_backend.as_ref(), &mut self.plugin_window);
     }
 
     pub fn is_plugin_window_open(&self) -> bool {
-        match self.loaded_backend.as_ref() {
-            Some(LoadedBackend::Native(_)) => self
-                .plugin_window
-                .as_ref()
-                .is_some_and(|w| w.is_open() && !w.closed_by_user()),
-            Some(LoadedBackend::NativeVst2(plugin_arc)) => plugin_arc
-                .try_lock()
-                .map(|p| p.is_editor_window_open())
-                .unwrap_or(true),
-            #[cfg(target_os = "linux")]
-            Some(LoadedBackend::Wine(wine)) => wine.is_gui_open(),
-            None => false,
-        }
+        self.loaded_backend
+            .as_ref()
+            .is_some_and(|b| is_backend_gui_open(b, &self.plugin_window))
     }
 
     /// Pump native editor window events; call once per UI frame when a plugin GUI is open.
     pub fn service_plugin_window(&mut self) {
-        let mut should_close = false;
-        if let Some(ref win) = self.plugin_window {
-            if win.closed_by_user() {
-                should_close = true;
-            } else if let Err(e) = win.service_platform_events() {
-                log::warn!("Plugin window event error: {e}");
-            }
-        }
-        if let Some(LoadedBackend::NativeVst2(ref plugin_arc)) = self.loaded_backend {
-            if let Ok(mut plugin) = plugin_arc.try_lock() {
-                plugin.service_editor_window();
-            }
-        }
-        if should_close {
-            self.close_plugin_window();
-        }
+        service_backend_gui(self.loaded_backend.as_ref(), &mut self.plugin_window);
     }
 
     pub fn start_recording(&mut self, path: PathBuf) -> Result<(), EngineError> {
@@ -1148,6 +760,476 @@ impl Drop for PedalEngine {
     fn drop(&mut self) {
         self.stop_audio();
         self.unload_vst3_plugin();
+    }
+}
+
+pub(crate) fn set_backend_param_live(handle: &ActivePluginHandle, id: u32, value: f64) {
+    match handle {
+        ActivePluginHandle::Native { plugin, .. } => {
+            if let Ok(mut p) = plugin.try_lock() {
+                let _ = p.set_parameter_at(id, value, 0);
+            }
+        }
+        ActivePluginHandle::NativeVst2 { plugin } => {
+            if let Ok(mut p) = plugin.try_lock() {
+                let _ = p.set_parameter(id, value);
+            }
+        }
+        ActivePluginHandle::Wine { channel } => {
+            if let Ok(mut ch) = channel.try_lock() {
+                ch.queue_param(id, value);
+            }
+        }
+    }
+}
+
+pub(crate) fn ensure_scratch_len(wet_l: &mut Vec<f32>, wet_r: &mut Vec<f32>, frames: usize) {
+    if wet_l.len() < frames {
+        wet_l.resize(frames, 0.0);
+        wet_r.resize(frames, 0.0);
+    }
+}
+
+pub(crate) fn process_active_handle(
+    handle: &ActivePluginHandle,
+    vst_buffers: &mut AudioBuffers,
+    wet_l: &mut Vec<f32>,
+    wet_r: &mut Vec<f32>,
+    io_l: &mut [f32],
+    io_r: &mut [f32],
+    frames: usize,
+    sample_rate: f64,
+    mix: f32,
+) {
+    match handle {
+        ActivePluginHandle::Native {
+            plugin,
+            in_channels,
+            out_channels,
+        } => {
+            let in_ch = *in_channels;
+            let out_ch = (*out_channels).max(1);
+            if vst_buffers.inputs.len() != in_ch || vst_buffers.outputs.len() != out_ch {
+                *vst_buffers = AudioBuffers::new(in_ch, out_ch, 4096, sample_rate);
+            }
+            PedalDspProcessor::prepare_vst_buffers(vst_buffers, frames, sample_rate, io_l, io_r);
+            if let Ok(mut p) = plugin.try_lock() {
+                if p.process_audio(vst_buffers).is_ok() {
+                    let dry = 1.0 - mix;
+                    let out_chs = vst_buffers.outputs.len();
+                    for i in 0..frames {
+                        let wl = if out_chs >= 1 {
+                            vst_buffers.outputs[0][i]
+                        } else {
+                            io_l[i]
+                        };
+                        let wr = if out_chs >= 2 {
+                            vst_buffers.outputs[1][i]
+                        } else {
+                            wl
+                        };
+                        io_l[i] = io_l[i] * dry + wl * mix;
+                        io_r[i] = io_r[i] * dry + wr * mix;
+                    }
+                }
+            }
+        }
+        ActivePluginHandle::NativeVst2 { plugin } => {
+            ensure_scratch_len(wet_l, wet_r, frames);
+            if let Ok(mut p) = plugin.try_lock() {
+                if p.process_stereo(io_l, io_r, &mut wet_l[..frames], &mut wet_r[..frames], frames, sample_rate) {
+                    let dry = 1.0 - mix;
+                    for i in 0..frames {
+                        io_l[i] = io_l[i] * dry + wet_l[i] * mix;
+                        io_r[i] = io_r[i] * dry + wet_r[i] * mix;
+                    }
+                }
+            }
+        }
+        ActivePluginHandle::Wine { channel } => {
+            ensure_scratch_len(wet_l, wet_r, frames);
+            if let Ok(mut ch) = channel.try_lock() {
+                if ch.process_stereo(io_l, io_r, &mut wet_l[..frames], &mut wet_r[..frames], frames, sample_rate) {
+                    let dry = 1.0 - mix;
+                    for i in 0..frames {
+                        io_l[i] = io_l[i] * dry + wet_l[i] * mix;
+                        io_r[i] = io_r[i] * dry + wet_r[i] * mix;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn load_plugin_backend(
+    requested_path: &Path,
+    sr: f64,
+    block: usize,
+    wine_config: &WineConfig,
+) -> Result<(LoadedBackend, LoadedPluginMeta, ActivePluginHandle), EngineError> {
+    if !requested_path.exists() {
+        return Err(EngineError::InvalidPluginPath(format!(
+            "Path does not exist: {}",
+            requested_path.display()
+        )));
+    }
+
+    if let Some(target) = pedal_wine::resolve_vst3_target(requested_path) {
+        #[cfg(target_os = "linux")]
+        match target.kind {
+            Vst3BinaryKind::WindowsPe64 => {
+                return load_wine_backend(&target.bundle_or_file, &target.binary_path, sr, block, wine_config);
+            }
+            Vst3BinaryKind::WindowsPe32 => {
+                return Err(EngineError::Wine(WineError::UnsupportedArch32(
+                    target.bundle_or_file.display().to_string(),
+                )));
+            }
+            Vst3BinaryKind::NativeElf | Vst3BinaryKind::Unknown => {}
+        }
+
+        let is_standalone_vst2 = is_vst2_extension(&target.bundle_or_file);
+        if is_standalone_vst2 {
+            if let Ok(res) = load_native_vst2_backend(&target.binary_path, sr, block) {
+                return Ok(res);
+            }
+        }
+        return match load_native_vst3_backend(&target.bundle_or_file, sr, block) {
+            Ok(res) => Ok(res),
+            Err(vst3_err) => {
+                if let Ok(res) = load_native_vst2_backend(&target.binary_path, sr, block) {
+                    Ok(res)
+                } else {
+                    Err(vst3_err)
+                }
+            }
+        };
+    }
+
+    if requested_path.is_dir() {
+        return Err(EngineError::InvalidPluginPath(format!(
+            "No VST2 (.dll/.so) or VST3 (.vst3) plugin found inside folder '{}'",
+            requested_path.display()
+        )));
+    }
+
+    if is_vst2_extension(requested_path) {
+        if let Ok(res) = load_native_vst2_backend(requested_path, sr, block) {
+            return Ok(res);
+        }
+    }
+
+    load_native_vst3_backend(requested_path, sr, block)
+}
+
+fn load_native_vst2_backend(
+    path: &Path,
+    sr: f64,
+    block: usize,
+) -> Result<(LoadedBackend, LoadedPluginMeta, ActivePluginHandle), EngineError> {
+    let vst2 = crate::vst2::NativeVst2Plugin::load(path, sr, block).map_err(EngineError::Vst2)?;
+    let info = vst2.info().clone();
+    let in_channels = vst2.input_channels();
+    let out_channels = vst2.output_channels().max(1);
+    let parameters = vst2.get_parameters();
+
+    let meta = LoadedPluginMeta {
+        info,
+        input_channels: in_channels,
+        output_channels: out_channels,
+        parameters,
+        is_wine_bridged: false,
+    };
+    let plugin_arc = Arc::new(Mutex::new(vst2));
+    let handle = ActivePluginHandle::NativeVst2 {
+        plugin: Arc::clone(&plugin_arc),
+    };
+    Ok((LoadedBackend::NativeVst2(plugin_arc), meta, handle))
+}
+
+fn load_native_vst3_backend(
+    path: &Path,
+    sr: f64,
+    block: usize,
+) -> Result<(LoadedBackend, LoadedPluginMeta, ActivePluginHandle), EngineError> {
+    let mut host = Vst3Host::builder()
+        .sample_rate(sr)
+        .block_size(block)
+        .input_channels(2)
+        .output_channels(2)
+        .build()?;
+
+    let mut plugin = host.load_plugin(path)?;
+    plugin.start_processing()?;
+
+    let layout = plugin.audio_bus_layout().ok();
+    let in_channels = layout
+        .as_ref()
+        .and_then(|l| l.inputs.first())
+        .map(|b| b.channel_count)
+        .unwrap_or(2);
+    let out_channels = layout
+        .as_ref()
+        .and_then(|l| l.outputs.first())
+        .map(|b| b.channel_count)
+        .unwrap_or(2)
+        .max(1);
+
+    let info = plugin.info().clone();
+    let parameters = collect_parameters(&plugin);
+
+    let meta = LoadedPluginMeta {
+        info,
+        input_channels: in_channels,
+        output_channels: out_channels,
+        parameters,
+        is_wine_bridged: false,
+    };
+    let plugin_arc = Arc::new(Mutex::new(plugin));
+    let handle = ActivePluginHandle::Native {
+        plugin: Arc::clone(&plugin_arc),
+        in_channels,
+        out_channels,
+    };
+    Ok((LoadedBackend::Native(plugin_arc), meta, handle))
+}
+
+#[cfg(target_os = "linux")]
+fn load_wine_backend(
+    requested_path: &Path,
+    dll_path: &Path,
+    sr: f64,
+    block: usize,
+    wine_config: &WineConfig,
+) -> Result<(LoadedBackend, LoadedPluginMeta, ActivePluginHandle), EngineError> {
+    let wine_plugin = WineVst3Plugin::load_with_config(dll_path, sr, block, wine_config)?;
+    let wmeta = wine_plugin.metadata();
+    let fallback_name = requested_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Wine VST")
+        .to_string();
+
+    let info = PluginInfo {
+        path: requested_path.to_path_buf(),
+        name: if wmeta.name.is_empty() {
+            fallback_name
+        } else {
+            wmeta.name.clone()
+        },
+        vendor: if wmeta.vendor.is_empty() {
+            "Windows VST (Wine)".to_string()
+        } else {
+            wmeta.vendor.clone()
+        },
+        version: wmeta.version.clone(),
+        category: wmeta.category.clone(),
+        uid: format!("wine:{}", requested_path.display()),
+        audio_inputs: if wmeta.in_channels > 0 { 1 } else { 0 },
+        audio_outputs: if wmeta.out_channels > 0 { 1 } else { 0 },
+        has_midi_input: false,
+        has_midi_output: false,
+        has_gui: wmeta.has_gui,
+    };
+
+    let meta = LoadedPluginMeta {
+        info,
+        input_channels: wmeta.in_channels,
+        output_channels: wmeta.out_channels.max(1),
+        parameters: wine_params_to_display(&wmeta.params),
+        is_wine_bridged: true,
+    };
+    let handle = ActivePluginHandle::Wine {
+        channel: wine_plugin.audio_channel(),
+    };
+    Ok((LoadedBackend::Wine(wine_plugin), meta, handle))
+}
+
+pub(crate) fn make_backend_active_handle(
+    backend: &LoadedBackend,
+    meta: &LoadedPluginMeta,
+) -> ActivePluginHandle {
+    match backend {
+        LoadedBackend::Native(plugin) => ActivePluginHandle::Native {
+            plugin: Arc::clone(plugin),
+            in_channels: meta.input_channels,
+            out_channels: meta.output_channels,
+        },
+        LoadedBackend::NativeVst2(plugin) => ActivePluginHandle::NativeVst2 {
+            plugin: Arc::clone(plugin),
+        },
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(wine) => ActivePluginHandle::Wine {
+            channel: wine.audio_channel(),
+        },
+    }
+}
+
+pub(crate) fn unload_backend_resources(backend: LoadedBackend) {
+    match backend {
+        LoadedBackend::Native(plugin_arc) => {
+            if let Ok(mut p) = plugin_arc.lock() {
+                let _ = p.stop_processing();
+            }
+        }
+        LoadedBackend::NativeVst2(plugin_arc) => {
+            if let Ok(mut p) = plugin_arc.lock() {
+                p.close_editor_window();
+            }
+        }
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(_) => {}
+    }
+}
+
+pub(crate) fn set_backend_param_ui(
+    backend: &LoadedBackend,
+    meta: &mut LoadedPluginMeta,
+    id: u32,
+    val: f64,
+) -> String {
+    let formatted = match backend {
+        LoadedBackend::Native(plugin_arc) => {
+            if let Ok(mut plugin) = plugin_arc.try_lock() {
+                let _ = plugin.set_parameter(id, val);
+                plugin
+                    .format_parameter(id, val)
+                    .unwrap_or_else(|_| format!("{:.2}", val))
+            } else {
+                format!("{:.2}", val)
+            }
+        }
+        LoadedBackend::NativeVst2(plugin_arc) => {
+            if let Ok(mut plugin) = plugin_arc.try_lock() {
+                plugin.set_parameter(id, val)
+            } else {
+                format!("{:.2}", val)
+            }
+        }
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(wine) => wine
+            .set_parameter(id, val)
+            .unwrap_or_else(|_| format!("{:.2}", val)),
+    };
+    if let Some(entry) = meta.parameters.iter_mut().find(|p| p.param.id == id) {
+        entry.param.value = val;
+        entry.formatted = formatted.clone();
+    }
+    formatted
+}
+
+pub(crate) fn refresh_backend_params_ui(backend: &LoadedBackend, meta: &mut LoadedPluginMeta) {
+    let params = match backend {
+        LoadedBackend::Native(plugin_arc) => {
+            let Ok(plugin) = plugin_arc.try_lock() else {
+                return;
+            };
+            collect_parameters(&plugin)
+        }
+        LoadedBackend::NativeVst2(plugin_arc) => {
+            let Ok(plugin) = plugin_arc.try_lock() else {
+                return;
+            };
+            plugin.get_parameters()
+        }
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(wine) => match wine.get_parameters() {
+            Ok(p) => wine_params_to_display(&p),
+            Err(_) => return,
+        },
+    };
+    meta.parameters = params;
+}
+
+pub(crate) fn open_backend_gui(
+    backend: &LoadedBackend,
+    plugin_window: &mut Option<PluginWindow>,
+) -> Result<(), EngineError> {
+    match backend {
+        LoadedBackend::Native(plugin_arc) => {
+            if let Some(win) = plugin_window {
+                if win.is_open() {
+                    return Ok(());
+                }
+            }
+            let mut window = PluginWindow::new(Arc::clone(plugin_arc));
+            window.open()?;
+            *plugin_window = Some(window);
+            Ok(())
+        }
+        LoadedBackend::NativeVst2(plugin_arc) => {
+            let mut plugin = plugin_arc
+                .lock()
+                .map_err(|_| EngineError::Vst2("VST2 mutex poisoned".into()))?;
+            plugin.open_editor_window().map_err(EngineError::Vst2)
+        }
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(wine) => {
+            wine.open_gui()?;
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn close_backend_gui(
+    backend: Option<&LoadedBackend>,
+    plugin_window: &mut Option<PluginWindow>,
+) {
+    if let Some(mut win) = plugin_window.take() {
+        win.close();
+    }
+    if let Some(b) = backend {
+        match b {
+            LoadedBackend::NativeVst2(plugin_arc) => {
+                if let Ok(mut plugin) = plugin_arc.lock() {
+                    plugin.close_editor_window();
+                }
+            }
+            #[cfg(target_os = "linux")]
+            LoadedBackend::Wine(wine) => {
+                wine.close_gui();
+            }
+            LoadedBackend::Native(_) => {}
+        }
+    }
+}
+
+pub(crate) fn is_backend_gui_open(
+    backend: &LoadedBackend,
+    plugin_window: &Option<PluginWindow>,
+) -> bool {
+    match backend {
+        LoadedBackend::Native(_) => plugin_window
+            .as_ref()
+            .is_some_and(|w| w.is_open() && !w.closed_by_user()),
+        LoadedBackend::NativeVst2(plugin_arc) => plugin_arc
+            .try_lock()
+            .map(|p| p.is_editor_window_open())
+            .unwrap_or(true),
+        #[cfg(target_os = "linux")]
+        LoadedBackend::Wine(wine) => wine.is_gui_open(),
+    }
+}
+
+pub(crate) fn service_backend_gui(
+    backend: Option<&LoadedBackend>,
+    plugin_window: &mut Option<PluginWindow>,
+) {
+    let mut should_close = false;
+    if let Some(win) = plugin_window {
+        if win.closed_by_user() {
+            should_close = true;
+        } else if let Err(e) = win.service_platform_events() {
+            log::warn!("Plugin window event error: {e}");
+        }
+    }
+    if let Some(LoadedBackend::NativeVst2(plugin_arc)) = backend {
+        if let Ok(mut plugin) = plugin_arc.try_lock() {
+            plugin.service_editor_window();
+        }
+    }
+    if should_close {
+        close_backend_gui(backend, plugin_window);
     }
 }
 
