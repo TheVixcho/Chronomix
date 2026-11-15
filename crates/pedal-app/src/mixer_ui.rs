@@ -579,6 +579,60 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
             }
         }
 
+        let media_count = ctx.mixer.count_media_channels();
+        if media_count > 0 {
+            let any_playing = ctx.mixer.is_any_media_playing();
+            let out = (!ctx.state.selected_output.is_empty()).then_some(ctx.state.selected_output.as_str());
+            ui.separator();
+            ui.label(
+                RichText::new(format!("PLAYBACK ({media_count})"))
+                    .small()
+                    .monospace()
+                    .strong()
+                    .color(WingColors::WING_ORANGE),
+            );
+            if draw_console_switch(
+                ui,
+                "-10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(26.0, 19.0),
+            ) {
+                let _ = ctx.mixer.seek_all_media_relative_seconds(-10.0, out);
+            }
+            let play_lbl = if any_playing { "||" } else { ">" };
+            if draw_console_switch(
+                ui,
+                play_lbl,
+                any_playing,
+                StudioPalette::ACCENT_EMERALD,
+                Vec2::new(26.0, 19.0),
+            ) {
+                if !ctx.mixer.is_audio_running() && !any_playing {
+                    (ctx.stop_classic_audio)();
+                }
+                let _ = ctx.mixer.set_all_media_transport(!any_playing, None, None, out);
+            }
+            if draw_console_switch(
+                ui,
+                "+10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(26.0, 19.0),
+            ) {
+                let _ = ctx.mixer.seek_all_media_relative_seconds(10.0, out);
+            }
+            if draw_console_switch(
+                ui,
+                "[]",
+                false,
+                Color32::from_rgb(80, 90, 110),
+                Vec2::new(22.0, 19.0),
+            ) {
+                let _ = ctx.mixer.set_all_media_transport(false, None, Some(0), out);
+            }
+        }
+
         let sr_khz = ctx.mixer.sample_rate() as f32 / 1000.0;
         let live = ctx.mixer.is_audio_running();
         let (stat_lbl, stat_col) = if live {
@@ -1383,6 +1437,25 @@ fn render_multimedia_source_deck(
                         None,
                         out,
                     );
+                }
+
+                if ctx.mixer.count_media_channels() > 1 {
+                    let any_playing = ctx.mixer.is_any_media_playing();
+                    let all_lbl = if any_playing { "PAUSE ALL" } else { "PLAY ALL (SYNC)" };
+                    if draw_console_switch(
+                        ui,
+                        all_lbl,
+                        any_playing,
+                        StudioPalette::ACCENT_CYAN,
+                        Vec2::new(96.0, 21.0),
+                    ) {
+                        if !ctx.mixer.is_audio_running() && !any_playing {
+                            (ctx.stop_classic_audio)();
+                        }
+                        let out = (!ctx.state.selected_output.is_empty())
+                            .then_some(ctx.state.selected_output.as_str());
+                        let _ = ctx.mixer.set_all_media_transport(!any_playing, None, None, out);
+                    }
                 }
 
                 if ui.small_button(t.mixer_media_to_audio).clicked() {
@@ -2426,7 +2499,155 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
             if changed {
                 ctx.mixer.set_master(fader_db, mute, dim, m.record_mix);
             }
+
+            let media_ch_count = ctx.mixer.count_media_channels();
+            if media_ch_count > 0 {
+                ui.add_space(5.0);
+                ui.separator();
+                ui.add_space(4.0);
+                render_global_playback_section(ui, ctx, deck_w);
+            }
         });
+}
+
+fn render_global_playback_section(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>, width: f32) {
+    let t = ctx.lang.text();
+    let media_count = ctx.mixer.count_media_channels();
+    let any_playing = ctx.mixer.is_any_media_playing();
+    let out = (!ctx.state.selected_output.is_empty()).then_some(ctx.state.selected_output.as_str());
+
+    let max_cur_secs = ctx
+        .mixer
+        .channels()
+        .iter()
+        .filter(|c| c.source.mode == ChannelInputMode::Multimedia)
+        .map(|c| c.media.current_frame as f64 / c.media.sample_rate.max(1) as f64)
+        .fold(0.0_f64, f64::max);
+
+    let max_tot_secs = ctx
+        .mixer
+        .channels()
+        .iter()
+        .filter(|c| c.source.mode == ChannelInputMode::Multimedia)
+        .map(|c| c.media.total_frames as f64 / c.media.sample_rate.max(1) as f64)
+        .fold(0.0_f64, f64::max);
+
+    ui.vertical(|ui| {
+        ui.set_max_width(width);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(t.mixer_playback_section_title)
+                    .small()
+                    .strong()
+                    .monospace()
+                    .color(WingColors::WING_ORANGE),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{media_count} CH"))
+                        .small()
+                        .monospace()
+                        .color(StudioPalette::ACCENT_CYAN),
+                );
+            });
+        });
+
+        let status_lbl = if any_playing {
+            t.mixer_playback_sync_all
+        } else {
+            t.mixer_playback_stop_all
+        };
+        ui.label(
+            RichText::new(status_lbl)
+                .small()
+                .color(StudioPalette::TEXT_MUTED),
+        );
+
+        ui.add_space(2.0);
+        let time_txt = format!(
+            "{} / {}",
+            format_media_time(max_cur_secs),
+            format_media_time(max_tot_secs)
+        );
+        ui.label(
+            RichText::new(time_txt)
+                .small()
+                .monospace()
+                .strong()
+                .color(if any_playing {
+                    StudioPalette::ACCENT_EMERALD
+                } else {
+                    StudioPalette::TEXT_SECONDARY
+                }),
+        );
+
+        ui.add_space(3.0);
+        let play_all_lbl = if any_playing {
+            t.mixer_playback_pause_all
+        } else {
+            t.mixer_playback_play_all
+        };
+        if draw_console_switch(
+            ui,
+            play_all_lbl,
+            any_playing,
+            StudioPalette::ACCENT_EMERALD,
+            Vec2::new(width, 24.0),
+        ) {
+            if !ctx.mixer.is_audio_running() && !any_playing {
+                (ctx.stop_classic_audio)();
+            }
+            let _ = ctx.mixer.set_all_media_transport(!any_playing, None, None, out);
+        }
+
+        ui.add_space(3.0);
+        let sub_w = ((width - 6.0) / 4.0).floor().max(20.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if draw_console_switch(
+                ui,
+                "-10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(sub_w, 20.0),
+            ) {
+                let _ = ctx.mixer.seek_all_media_relative_seconds(-10.0, out);
+            }
+            if draw_console_switch(
+                ui,
+                "+10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(sub_w, 20.0),
+            ) {
+                let _ = ctx.mixer.seek_all_media_relative_seconds(10.0, out);
+            }
+            if draw_console_switch(
+                ui,
+                "[]",
+                false,
+                Color32::from_rgb(80, 90, 110),
+                Vec2::new(sub_w, 20.0),
+            ) {
+                let _ = ctx.mixer.set_all_media_transport(false, None, Some(0), out);
+            }
+            let any_looping = ctx
+                .mixer
+                .channels()
+                .iter()
+                .any(|c| c.source.mode == ChannelInputMode::Multimedia && c.media.looping);
+            if draw_console_switch(
+                ui,
+                "LP",
+                any_looping,
+                WingColors::WING_ORANGE,
+                Vec2::new(sub_w, 20.0),
+            ) {
+                let next_loop = !any_looping;
+                let _ = ctx.mixer.set_all_media_transport(any_playing, Some(next_loop), None, out);
+            }
+        });
+    });
 }
 
 fn render_fader_bank(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
@@ -2823,8 +3044,175 @@ fn render_channel_bank_selector(
 
                     ui.add_space(3.0);
                 }
+
+                if ctx.state.active_bank == ChannelBankSection::Multimedia {
+                    ui.add_space(5.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    render_bank_multimedia_toolbar(ui, ctx, width - 8.0);
+                }
             });
         });
+}
+
+fn render_bank_multimedia_toolbar(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>, width: f32) {
+    let any_playing = ctx.mixer.is_any_media_playing();
+    let media_count = ctx.mixer.count_media_channels();
+    let out = (!ctx.state.selected_output.is_empty()).then_some(ctx.state.selected_output.as_str());
+
+    let (target_ch, cur_time_str) = match ctx.state.selection {
+        WingSelection::Channel(idx)
+            if idx < ctx.mixer.channels().len()
+                && ctx.mixer.channels()[idx].source.mode == ChannelInputMode::Multimedia =>
+        {
+            let ch = &ctx.mixer.channels()[idx];
+            let cur_s = ch.media.current_frame as f64 / ch.media.sample_rate.max(1) as f64;
+            (Some(idx), format_media_time(cur_s))
+        }
+        _ => {
+            let first_media = ctx
+                .mixer
+                .channels()
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.source.mode == ChannelInputMode::Multimedia);
+            if let Some((idx, ch)) = first_media {
+                let cur_s = ch.media.current_frame as f64 / ch.media.sample_rate.max(1) as f64;
+                (Some(idx), format_media_time(cur_s))
+            } else {
+                (None, "00:00".to_string())
+            }
+        }
+    };
+
+    ui.vertical(|ui| {
+        ui.set_max_width(width);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                RichText::new("TOOLBAR")
+                    .small()
+                    .monospace()
+                    .strong()
+                    .color(StudioPalette::ACCENT_CYAN),
+            );
+            ui.label(
+                RichText::new(&cur_time_str)
+                    .small()
+                    .monospace()
+                    .color(if any_playing {
+                        StudioPalette::ACCENT_EMERALD
+                    } else {
+                        StudioPalette::TEXT_SECONDARY
+                    }),
+            );
+        });
+
+        ui.add_space(3.0);
+        let btn_w = ((width - 4.0) / 3.0).floor().max(22.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if draw_console_switch(
+                ui,
+                "-10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(btn_w, 20.0),
+            ) {
+                if let Some(ch) = target_ch {
+                    let _ = ctx.mixer.seek_media_relative_seconds(ch, -10.0, out);
+                } else {
+                    let _ = ctx.mixer.seek_all_media_relative_seconds(-10.0, out);
+                }
+            }
+
+            let play_sym = if any_playing { "||" } else { ">" };
+            if draw_console_switch(
+                ui,
+                play_sym,
+                any_playing,
+                StudioPalette::ACCENT_EMERALD,
+                Vec2::new(btn_w, 20.0),
+            ) {
+                if !ctx.mixer.is_audio_running() && !any_playing {
+                    (ctx.stop_classic_audio)();
+                }
+                let next_play = !any_playing;
+                if let Some(ch) = target_ch {
+                    let looping = ctx.mixer.channels()[ch].media.looping;
+                    let _ = ctx.mixer.set_media_transport(ch, next_play, looping, None, out);
+                } else {
+                    let _ = ctx.mixer.set_all_media_transport(next_play, None, None, out);
+                }
+            }
+
+            if draw_console_switch(
+                ui,
+                "+10",
+                false,
+                Color32::from_rgb(70, 82, 104),
+                Vec2::new(btn_w, 20.0),
+            ) {
+                if let Some(ch) = target_ch {
+                    let _ = ctx.mixer.seek_media_relative_seconds(ch, 10.0, out);
+                } else {
+                    let _ = ctx.mixer.seek_all_media_relative_seconds(10.0, out);
+                }
+            }
+        });
+
+        ui.add_space(2.0);
+        let row2_btn_w = ((width - 2.0) * 0.5).floor().max(32.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if draw_console_switch(
+                ui,
+                "[]",
+                false,
+                Color32::from_rgb(80, 90, 110),
+                Vec2::new(row2_btn_w, 19.0),
+            ) {
+                if let Some(ch) = target_ch {
+                    let looping = ctx.mixer.channels()[ch].media.looping;
+                    let _ = ctx.mixer.set_media_transport(ch, false, looping, Some(0), out);
+                } else {
+                    let _ = ctx.mixer.set_all_media_transport(false, None, Some(0), out);
+                }
+            }
+
+            let loop_active = target_ch
+                .map(|ch| ctx.mixer.channels()[ch].media.looping)
+                .unwrap_or(false);
+            if draw_console_switch(
+                ui,
+                "LP",
+                loop_active,
+                WingColors::WING_ORANGE,
+                Vec2::new(row2_btn_w, 19.0),
+            ) {
+                if let Some(ch) = target_ch {
+                    let playing = ctx.mixer.channels()[ch].media.playing;
+                    let _ = ctx.mixer.set_media_transport(ch, playing, !loop_active, None, out);
+                }
+            }
+        });
+
+        if media_count > 1 {
+            ui.add_space(2.0);
+            let all_lbl = if any_playing { "PAUSE ALL" } else { "PLAY ALL" };
+            if draw_console_switch(
+                ui,
+                all_lbl,
+                any_playing,
+                StudioPalette::ACCENT_CYAN,
+                Vec2::new(width, 21.0),
+            ) {
+                if !ctx.mixer.is_audio_running() && !any_playing {
+                    (ctx.stop_classic_audio)();
+                }
+                let _ = ctx.mixer.set_all_media_transport(!any_playing, None, None, out);
+            }
+        }
+    });
 }
 
 fn render_empty_bank_card(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
@@ -3116,7 +3504,6 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
             ui.set_min_width(82.0);
             ui.set_max_width(82.0);
             ui.vertical(|ui| {
-                let scribble_bg = Color32::from_rgb(13, 16, 22);
                 let (scr_rect, scr_resp) =
                     ui.allocate_exact_size(Vec2::new(82.0, 48.0), Sense::click());
                 if scr_resp.clicked() {
@@ -3145,27 +3532,39 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                     );
                 });
 
-                let p = ui.painter();
-                p.rect_filled(scr_rect, CornerRadius::same(2), scribble_bg);
-                p.rect_filled(
-                    Rect::from_min_size(scr_rect.min, Vec2::new(scr_rect.width(), 14.0)),
-                    CornerRadius::same(1),
-                    strip_accent,
-                );
-                p.rect_stroke(
-                    scr_rect,
-                    CornerRadius::same(2),
-                    Stroke::new(1.0_f32, strip_accent),
-                    StrokeKind::Inside,
-                );
-                let top_txt = format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7));
-                p.text(
-                    Pos2::new(scr_rect.center().x, scr_rect.top() + 7.0),
-                    Align2::CENTER_CENTER,
-                    top_txt,
-                    FontId::monospace(9.5),
-                    Color32::from_rgb(12, 14, 20),
-                );
+                {
+                    let p = ui.painter();
+                    let socket_rect = scr_rect.expand(1.2);
+                    p.rect_filled(socket_rect, CornerRadius::same(3), Color32::from_rgb(7, 7, 9));
+                    p.rect_stroke(
+                        socket_rect,
+                        CornerRadius::same(3),
+                        Stroke::new(1.0_f32, Color32::from_rgb(26, 28, 34)),
+                        StrokeKind::Inside,
+                    );
+
+                    p.rect_filled(scr_rect, CornerRadius::same(2), Color32::from_rgb(10, 11, 14));
+                    p.rect_filled(
+                        Rect::from_min_size(scr_rect.min, Vec2::new(scr_rect.width(), 14.0)),
+                        CornerRadius::same(1),
+                        strip_accent,
+                    );
+                    p.rect_stroke(
+                        scr_rect,
+                        CornerRadius::same(2),
+                        Stroke::new(1.0_f32, strip_accent),
+                        StrokeKind::Inside,
+                    );
+                    let top_txt = format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7));
+                    p.text(
+                        Pos2::new(scr_rect.center().x, scr_rect.top() + 7.0),
+                        Align2::CENTER_CENTER,
+                        top_txt,
+                        FontId::monospace(9.5),
+                        Color32::from_rgb(12, 14, 20),
+                    );
+                }
+
                 let (src_lbl, src_col) = match ch.source.mode {
                     ChannelInputMode::Unassigned => {
                         (t.mixer_unassigned.to_string(), StudioPalette::TEXT_MUTED)
@@ -3217,6 +3616,8 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         src_col,
                     );
                 }
+
+                paint_glass_scribble_cover(&ui.painter(), scr_rect);
 
                 ui.add_space(3.0);
                 if is_media {
@@ -3466,6 +3867,23 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
         })
         .response;
 
+    let strip_rect = frame_resp.rect;
+    let painter = ui.painter();
+    painter.line_segment(
+        [
+            Pos2::new(strip_rect.left() + 0.8, strip_rect.top() + 4.0),
+            Pos2::new(strip_rect.left() + 0.8, strip_rect.bottom() - 4.0),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 10)),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(strip_rect.right() - 0.8, strip_rect.top() + 4.0),
+            Pos2::new(strip_rect.right() - 0.8, strip_rect.bottom() - 4.0),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 80)),
+    );
+
     if ctx.state.scroll_to_channel == Some(idx) {
         ctx.state.scroll_to_channel = None;
         frame_resp.scroll_to_me(Some(egui::Align::Center));
@@ -3535,7 +3953,7 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
     let vmic_active = ctx.mixer.is_virtual_mic_active();
     let mut pending_toggle_vmic = false;
 
-    egui::Frame::new()
+    let master_frame_resp = egui::Frame::new()
         .fill(if selected {
             Color32::from_rgb(33, 29, 24)
         } else {
@@ -3546,7 +3964,7 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
             if selected {
                 WingColors::WING_ORANGE
             } else {
-                Color32::from_rgb(76, 62, 42)
+                Color32::from_rgb(46, 52, 66)
             },
         ))
         .corner_radius(CornerRadius::same(3))
@@ -3561,7 +3979,16 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     ctx.state.selection = WingSelection::Master;
                 }
                 let p = ui.painter();
-                p.rect_filled(scr_rect, CornerRadius::same(2), WingColors::BEZEL);
+                let socket_rect = scr_rect.expand(1.2);
+                p.rect_filled(socket_rect, CornerRadius::same(3), Color32::from_rgb(7, 7, 9));
+                p.rect_stroke(
+                    socket_rect,
+                    CornerRadius::same(3),
+                    Stroke::new(1.0_f32, Color32::from_rgb(26, 28, 34)),
+                    StrokeKind::Inside,
+                );
+
+                p.rect_filled(scr_rect, CornerRadius::same(2), Color32::from_rgb(10, 11, 14));
                 p.rect_filled(
                     Rect::from_min_size(scr_rect.min, Vec2::new(scr_rect.width(), 14.0)),
                     CornerRadius::same(1),
@@ -3591,6 +4018,8 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                         WingColors::WING_ORANGE
                     },
                 );
+
+                paint_glass_scribble_cover(&p, scr_rect);
 
                 ui.add_space(3.0);
                 if draw_console_switch(
@@ -3713,7 +4142,25 @@ fn render_wing_master_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                     ctx.state.selection = WingSelection::Master;
                 }
             });
-        });
+        })
+        .response;
+
+    let master_rect = master_frame_resp.rect;
+    let painter = ui.painter();
+    painter.line_segment(
+        [
+            Pos2::new(master_rect.left() + 0.8, master_rect.top() + 4.0),
+            Pos2::new(master_rect.left() + 0.8, master_rect.bottom() - 4.0),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(master_rect.right() - 0.8, master_rect.top() + 4.0),
+            Pos2::new(master_rect.right() - 0.8, master_rect.bottom() - 4.0),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 85)),
+    );
 
     if changed {
         ctx.mixer.set_master(fader_db, mute, dim, m.record_mix);

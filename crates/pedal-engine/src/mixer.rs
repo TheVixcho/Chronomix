@@ -1917,6 +1917,65 @@ impl MixerEngine {
         self.set_media_transport(ch, playing, looping, Some(target), fallback_output_device)
     }
 
+    pub fn is_any_media_playing(&self) -> bool {
+        self.channels
+            .iter()
+            .any(|c| c.source.mode == ChannelInputMode::Multimedia && c.media.playing)
+    }
+
+    pub fn count_media_channels(&self) -> usize {
+        self.channels
+            .iter()
+            .filter(|c| c.source.mode == ChannelInputMode::Multimedia)
+            .count()
+    }
+
+    pub fn set_all_media_transport(
+        &mut self,
+        playing: bool,
+        looping: Option<bool>,
+        seek_frame: Option<usize>,
+        fallback_output_device: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let indices: Vec<usize> = self
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.source.mode == ChannelInputMode::Multimedia)
+            .map(|(i, _)| i)
+            .collect();
+        for ch in indices {
+            let loop_val = looping.unwrap_or(self.channels[ch].media.looping);
+            let seek_val = if !playing && seek_frame == Some(0) {
+                Some(0)
+            } else if playing && self.channels[ch].media.current_frame >= self.channels[ch].media.total_frames {
+                Some(0)
+            } else {
+                seek_frame
+            };
+            let _ = self.set_media_transport(ch, playing, loop_val, seek_val, fallback_output_device);
+        }
+        Ok(())
+    }
+
+    pub fn seek_all_media_relative_seconds(
+        &mut self,
+        delta_secs: f64,
+        fallback_output_device: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let indices: Vec<usize> = self
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.source.mode == ChannelInputMode::Multimedia && c.media.total_frames > 0)
+            .map(|(i, _)| i)
+            .collect();
+        for ch in indices {
+            let _ = self.seek_media_relative_seconds(ch, delta_secs, fallback_output_device);
+        }
+        Ok(())
+    }
+
     pub fn unload_channel_media(&mut self, ch: usize) {
         if ch >= self.channels.len() {
             return;
@@ -3132,5 +3191,49 @@ mod tests {
         let v_r = vrx.pop().unwrap();
         assert!((v_l - 0.4).abs() < 1e-4);
         assert!(v_r.abs() < 1e-4);
+    }
+
+    #[test]
+    fn multitrack_media_transport_synchronizes_all_playback() {
+        let mut engine = MixerEngine::new();
+        assert_eq!(engine.count_media_channels(), 0);
+        let m1 = engine.add_multimedia_channel().unwrap();
+        let m2 = engine.add_multimedia_channel().unwrap();
+        assert_eq!(engine.count_media_channels(), 2);
+        assert!(!engine.is_any_media_playing());
+
+        let buf1 = MediaBuffer {
+            interleaved_stereo: vec![0.1_f32; 48000 * 2],
+            total_frames: 48000,
+            sample_rate: 48000,
+            title: "stem1".into(),
+        };
+        let buf2 = MediaBuffer {
+            interleaved_stereo: vec![0.2_f32; 48000 * 2],
+            total_frames: 48000,
+            sample_rate: 48000,
+            title: "stem2".into(),
+        };
+        let _ = engine.install_channel_media_buffer(m1, PathBuf::from("stem1.wav"), buf1, false, None);
+        let _ = engine.install_channel_media_buffer(m2, PathBuf::from("stem2.wav"), buf2, false, None);
+
+        assert_eq!(engine.channel(m1).unwrap().media.total_frames, 48000);
+        assert_eq!(engine.channel(m2).unwrap().media.total_frames, 48000);
+
+        let _ = engine.set_all_media_transport(true, Some(true), None, None);
+        assert!(engine.channel(m1).unwrap().media.playing);
+        assert!(engine.channel(m2).unwrap().media.playing);
+        assert!(engine.is_any_media_playing());
+
+        let _ = engine.seek_all_media_relative_seconds(10.0, None);
+        assert_eq!(engine.channel(m1).unwrap().media.current_frame, 48000);
+        assert_eq!(engine.channel(m2).unwrap().media.current_frame, 48000);
+
+        let _ = engine.set_all_media_transport(false, None, Some(0), None);
+        assert!(!engine.channel(m1).unwrap().media.playing);
+        assert!(!engine.channel(m2).unwrap().media.playing);
+        assert_eq!(engine.channel(m1).unwrap().media.current_frame, 0);
+        assert_eq!(engine.channel(m2).unwrap().media.current_frame, 0);
+        assert!(!engine.is_any_media_playing());
     }
 }
