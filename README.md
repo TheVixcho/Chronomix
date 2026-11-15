@@ -53,17 +53,13 @@ O descarga **`Chronomix-macOS.dmg`** desde [Releases](https://github.com/TheVixc
 
 ---
 
-## Automatización de Releases (CI/CD con GitHub Actions)
+## Empaquetado de Releases (`build-release.sh`)
 
-El repositorio incluye el flujo automatizado [`.github/workflows/release.yml`](.github/workflows/release.yml).
-Cada vez que cambies la versión en `Cargo.toml` y hagas push a `main`, o publiques un nuevo tag:
+Para generar todos los instaladores oficiales de producción (`Chronomix-Setup-Windows-x64.exe`, `Chronomix-Setup-Windows-ARM64.exe` y `Chronomix-Linux-x86_64.tar.gz`) directamente en `./dist/`:
 
 ```bash
-git tag v0.0.1
-git push origin v0.0.1
+./build-release.sh
 ```
-
-GitHub Actions encenderá automáticamente máquinas virtuales de **Windows**, **Linux** y **macOS**, compilará el proyecto en modo `--release`, empaquetará el instalador `.exe` (con Inno Setup, licencia MIT y acceso directo en escritorio), el paquete `.deb`, el `.dmg` de macOS y el instalador `install.sh`, y los publicará en **GitHub Releases**.
 
 ---
 
