@@ -172,19 +172,23 @@ impl WingColors {
     const WALNUT_DARK: Color32 = Color32::from_rgb(14, 14, 17);
 }
 
-const WING_PALETTE_SWATCHES: [[u8; 3]; 12] = [
-    [245, 245, 250],
-    [220, 222, 230],
-    [195, 198, 206],
-    [170, 174, 184],
-    [150, 154, 164],
-    [130, 134, 144],
-    [112, 116, 126],
-    [95, 99, 108],
-    [80, 84, 92],
-    [65, 68, 76],
-    [180, 185, 195],
-    [235, 238, 244],
+const WING_PALETTE_SWATCHES: [[u8; 3]; 16] = [
+    [20, 22, 28],
+    [54, 58, 70],
+    [150, 156, 172],
+    [230, 235, 245],
+    [235, 48, 56],
+    [245, 115, 30],
+    [245, 175, 35],
+    [245, 215, 45],
+    [140, 215, 45],
+    [36, 195, 105],
+    [32, 205, 175],
+    [28, 195, 240],
+    [48, 145, 245],
+    [60, 95, 235],
+    [155, 75, 240],
+    [235, 55, 160],
 ];
 
 pub struct MixerPanelContext<'a> {
@@ -507,8 +511,21 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                 }
             };
 
+        let tag_lum = tag_bg.r() as f32 * 0.299 + tag_bg.g() as f32 * 0.587 + tag_bg.b() as f32 * 0.114;
+        let tag_fg = if tag_lum > 130.0 {
+            Color32::from_rgb(12, 14, 20)
+        } else {
+            Color32::from_rgb(235, 240, 250)
+        };
+        let tag_border = if tag_lum < 50.0 {
+            Stroke::new(1.0_f32, Color32::from_rgb(52, 58, 72))
+        } else {
+            Stroke::NONE
+        };
+
         egui::Frame::new()
             .fill(tag_bg)
+            .stroke(tag_border)
             .corner_radius(CornerRadius::same(2))
             .inner_margin(Margin::symmetric(8, 3))
             .show(ui, |ui| {
@@ -522,7 +539,7 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                                 ctx.state,
                                 ic_rect,
                                 ic,
-                                Color32::from_rgb(12, 14, 20),
+                                tag_fg,
                             );
                         }
                     }
@@ -530,7 +547,7 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                         RichText::new(tag_title)
                             .strong()
                             .size(12.0)
-                            .color(Color32::from_rgb(12, 14, 20)),
+                            .color(tag_fg),
                     );
                 });
             });
@@ -953,31 +970,50 @@ fn render_screen_source_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
     let mut dsp = ch.dsp;
     let mut dsp_changed = false;
 
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.label(RichText::new(t.mixer_channel_name).strong().color(StudioPalette::TEXT_SECONDARY));
-        let edit_w = (ui.available_width() * 0.28).clamp(95.0, 165.0);
+        let edit_w = (ui.available_width() * 0.40).clamp(110.0, 190.0);
         if ui
             .add_sized(Vec2::new(edit_w, 22.0), egui::TextEdit::singleline(&mut name_buf))
             .changed()
         {
             ctx.mixer.set_channel_name(idx, name_buf);
         }
+    });
 
-        ui.label(RichText::new(t.mixer_channel_color).small().color(StudioPalette::TEXT_SECONDARY));
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(t.mixer_channel_color).small().strong().color(WingColors::WING_ORANGE));
+        ui.spacing_mut().item_spacing = Vec2::new(3.0, 3.0);
         for rgb in WING_PALETTE_SWATCHES {
             let swatch = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
             let selected = ch.color == rgb;
-            let (r, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             if resp.clicked() {
                 ctx.mixer.set_channel_color(idx, rgb);
             }
-            ui.painter().rect_filled(r, CornerRadius::same(2), swatch);
+            let is_dark = (rgb[0] as f32 * 0.299 + rgb[1] as f32 * 0.587 + rgb[2] as f32 * 0.114) < 45.0;
+            let base_stroke = if is_dark {
+                Stroke::new(1.0_f32, Color32::from_rgb(60, 66, 80))
+            } else {
+                Stroke::NONE
+            };
+            ui.painter().rect(
+                r,
+                CornerRadius::same(3),
+                swatch,
+                base_stroke,
+                StrokeKind::Inside,
+            );
             if selected {
                 ui.painter().rect_stroke(
-                    r,
-                    CornerRadius::same(2),
+                    r.expand(1.0),
+                    CornerRadius::same(3),
                     Stroke::new(2.0_f32, Color32::WHITE),
-                    StrokeKind::Inside,
+                    StrokeKind::Outside,
                 );
             }
         }
@@ -3481,13 +3517,18 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
     let mut pending_load_media = false;
     let mut pending_remove = false;
 
+    let ch_lum = ch.color[0] as f32 * 0.299 + ch.color[1] as f32 * 0.587 + ch.color[2] as f32 * 0.114;
     let frame_bg = if selected {
         WingColors::STRIP_SELECTED
     } else {
         WingColors::STRIP_BG
     };
     let border_col = if selected {
-        strip_accent
+        if ch_lum < 50.0 {
+            WingColors::WING_ORANGE
+        } else {
+            strip_accent
+        }
     } else {
         Color32::from_rgb(40, 46, 58)
     };
@@ -3549,19 +3590,29 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         CornerRadius::same(1),
                         strip_accent,
                     );
+                    let stroke_col = if ch_lum < 50.0 {
+                        Color32::from_rgb(46, 50, 62)
+                    } else {
+                        strip_accent
+                    };
                     p.rect_stroke(
                         scr_rect,
                         CornerRadius::same(2),
-                        Stroke::new(1.0_f32, strip_accent),
+                        Stroke::new(1.0_f32, stroke_col),
                         StrokeKind::Inside,
                     );
                     let top_txt = format!("{:02} {}", idx + 1, truncate_chars(&ch.name, 7));
+                    let top_txt_col = if ch_lum > 130.0 {
+                        Color32::from_rgb(12, 14, 20)
+                    } else {
+                        Color32::from_rgb(230, 235, 245)
+                    };
                     p.text(
                         Pos2::new(scr_rect.center().x, scr_rect.top() + 7.0),
                         Align2::CENTER_CENTER,
                         top_txt,
                         FontId::monospace(9.5),
-                        Color32::from_rgb(12, 14, 20),
+                        top_txt_col,
                     );
                 }
 
@@ -3599,7 +3650,12 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                         Pos2::new(scr_rect.left() + 4.0, scr_rect.top() + 19.0),
                         Vec2::new(22.0, 22.0),
                     );
-                    draw_channel_icon(ui, ctx.state, ic_rect, &ch.icon, strip_accent);
+                    let icon_tint = if ch_lum < 50.0 {
+                        Color32::from_rgb(190, 196, 210)
+                    } else {
+                        strip_accent
+                    };
+                    draw_channel_icon(ui, ctx.state, ic_rect, &ch.icon, icon_tint);
                     ui.painter().text(
                         Pos2::new(scr_rect.left() + 54.0, scr_rect.top() + 30.0),
                         Align2::CENTER_CENTER,
@@ -3825,7 +3881,12 @@ fn render_wing_channel_strip(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>,
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if draw_wing_fader(ui, ("wing_fader", idx), &mut dsp.fader_db, strip_accent, 160.0) {
+                    let fader_accent = if ch_lum < 50.0 {
+                        Color32::from_rgb(140, 145, 160)
+                    } else {
+                        strip_accent
+                    };
+                    if draw_wing_fader(ui, ("wing_fader", idx), &mut dsp.fader_db, fader_accent, 160.0) {
                         dsp_changed = true;
                     }
                     draw_wing_vertical_meter(
@@ -4320,19 +4381,34 @@ fn show_channel_context_menu(
     ui.horizontal_wrapped(|ui| {
         for rgb in WING_PALETTE_SWATCHES {
             let swatch = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-            let (r, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
-            ui.painter().rect_filled(r, CornerRadius::same(2), swatch);
-            if ch.color == rgb {
-                ui.painter().rect_stroke(
-                    r,
-                    CornerRadius::same(2),
-                    Stroke::new(1.5_f32, Color32::WHITE),
-                    StrokeKind::Inside,
-                );
+            let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if resp.clicked() {
                 *pending_color = Some(rgb);
                 ui.close();
+            }
+            let is_dark = (rgb[0] as f32 * 0.299 + rgb[1] as f32 * 0.587 + rgb[2] as f32 * 0.114) < 45.0;
+            let base_stroke = if is_dark {
+                Stroke::new(1.0_f32, Color32::from_rgb(60, 66, 80))
+            } else {
+                Stroke::NONE
+            };
+            ui.painter().rect(
+                r,
+                CornerRadius::same(3),
+                swatch,
+                base_stroke,
+                StrokeKind::Inside,
+            );
+            if ch.color == rgb {
+                ui.painter().rect_stroke(
+                    r.expand(1.0),
+                    CornerRadius::same(3),
+                    Stroke::new(2.0_f32, Color32::WHITE),
+                    StrokeKind::Outside,
+                );
             }
         }
     });

@@ -1337,15 +1337,8 @@ struct ActiveVirtualMic {
     pipe: Option<ActiveVirtualMicPipe>,
 }
 
-const DEFAULT_WING_COLORS: [[u8; 3]; 8] = [
-    [220, 224, 232],
-    [185, 190, 200],
-    [240, 242, 248],
-    [160, 165, 175],
-    [205, 210, 218],
-    [140, 145, 155],
-    [230, 234, 240],
-    [170, 175, 185],
+const DEFAULT_WING_COLORS: [[u8; 3]; 1] = [
+    [20, 22, 28],
 ];
 
 pub struct MixerEngine {
