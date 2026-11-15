@@ -113,9 +113,11 @@ pub fn inspect_binary_kind(path: &Path) -> Vst3BinaryKind {
     }
 }
 
-/// Resolve a `.vst3` file, bundle directory, or parent folder into the best binary candidate.
+/// Resolve a `.vst3` / `.dll` / `.so` file, bundle directory, or parent folder into the best
+/// binary candidate.
 ///
-/// On Linux, priority order is `NativeElf` > `WindowsPe64` > `WindowsPe32`.
+/// On Linux, priority order is `NativeElf` > `WindowsPe64` > `WindowsPe32`, preferring `.vst3`
+/// over standalone `.dll`/`.so` when both exist.
 pub fn resolve_vst3_target(path: &Path) -> Option<ResolvedVst3Target> {
     if path.is_file() {
         return Some(ResolvedVst3Target {
@@ -134,13 +136,43 @@ pub fn resolve_vst3_target(path: &Path) -> Option<ResolvedVst3Target> {
 
     let mut candidates = Vec::new();
     collect_vst3_targets(path, 0, &mut candidates);
-    candidates.sort_by_key(|c| match c.kind {
-        Vst3BinaryKind::NativeElf => 0,
-        Vst3BinaryKind::WindowsPe64 => 1,
-        Vst3BinaryKind::WindowsPe32 => 2,
-        Vst3BinaryKind::Unknown => 3,
+    candidates.sort_by_key(|c| {
+        let kind_rank = match c.kind {
+            Vst3BinaryKind::NativeElf => 0,
+            Vst3BinaryKind::WindowsPe64 => 1,
+            Vst3BinaryKind::WindowsPe32 => 2,
+            Vst3BinaryKind::Unknown => 3,
+        };
+        let ext_rank = if has_vst3_extension(&c.bundle_or_file) {
+            0
+        } else {
+            1
+        };
+        (kind_rank, ext_rank)
     });
     candidates.into_iter().next()
+}
+
+/// Collect all VST3 and VST2 plugin targets inside a directory tree, deduplicating 32-bit (`x86`)
+/// variants when a 64-bit (`NativeElf` or `WindowsPe64`) plugin with the same stem is present.
+pub fn collect_all_vst_targets(dir: &Path) -> Vec<ResolvedVst3Target> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+    let mut raw = Vec::new();
+    collect_vst3_targets(dir, 0, &mut raw);
+
+    let mut out: Vec<ResolvedVst3Target> = Vec::new();
+    for item in raw {
+        if item.kind == Vst3BinaryKind::WindowsPe32 {
+            // Skip 32-bit if a 64-bit target exists, since 32-bit is not supported on x86_64 host.
+            continue;
+        }
+        if !out.iter().any(|existing| existing.binary_path == item.binary_path) {
+            out.push(item);
+        }
+    }
+    out
 }
 
 /// Backwards-compatible wrapper returning only `(binary_path, kind)`.
@@ -152,6 +184,12 @@ fn has_vst3_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("vst3"))
+}
+
+fn has_vst2_binary_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("so"))
 }
 
 fn resolve_vst3_bundle_dir(bundle: &Path) -> Option<ResolvedVst3Target> {
@@ -199,6 +237,15 @@ fn collect_vst3_targets(dir: &Path, depth: usize, out: &mut Vec<ResolvedVst3Targ
                 if let Some(target) = resolve_vst3_bundle_dir(&p) {
                     out.push(target);
                 }
+            }
+        } else if p.is_file() && has_vst2_binary_extension(&p) {
+            let kind = inspect_binary_kind(&p);
+            if kind != Vst3BinaryKind::Unknown {
+                out.push(ResolvedVst3Target {
+                    bundle_or_file: p.clone(),
+                    binary_path: p,
+                    kind,
+                });
             }
         } else if p.is_dir() {
             subdirs.push(p);

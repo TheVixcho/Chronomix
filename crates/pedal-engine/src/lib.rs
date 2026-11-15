@@ -1,3 +1,5 @@
+pub mod vst2;
+
 use std::{
     fs::File,
     io::BufWriter,
@@ -15,22 +17,27 @@ use pedal_audio::{
     ActiveAudioInfo, AudioDeviceInfo, AudioError, AudioSession, AudioSessionConfig, AudioStats,
     StereoAudioProcessor,
 };
-use pedal_wine::{Vst3BinaryKind, WineAudioChannel, WineError, WineParamInfo, WineVst3Plugin};
+use pedal_wine::{
+    Vst3BinaryKind, WineAudioChannel, WineError, WineParamInfo, WineVst3Plugin,
+};
 use rtrb::{Consumer, Producer, RingBuffer};
 use thiserror::Error;
+use vst2::NativeVst2Plugin;
 use vst3_host::{
     AudioBuffers, Parameter, Plugin, PluginInfo, PluginWindow, Vst3Host,
     discovery::{DEFAULT_PROBE_TIMEOUT, discover_plugins_safe},
 };
 
-/// Errors produced by the Chronomix DSP, VST3, or recording engine.
+/// Errors produced by the Chronomix DSP, VST2/VST3, or recording engine.
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("Audio error: {0}")]
     Audio(#[from] AudioError),
     #[error("VST3 host error: {0}")]
     Vst3(#[from] vst3_host::Error),
-    #[error("Wine VST3 bridge error: {0}")]
+    #[error("VST2 host error: {0}")]
+    Vst2(String),
+    #[error("Wine VST bridge error: {0}")]
     Wine(#[from] WineError),
     #[error("Invalid plugin path: {0}")]
     InvalidPluginPath(String),
@@ -167,6 +174,9 @@ enum ActivePluginHandle {
         in_channels: usize,
         out_channels: usize,
     },
+    NativeVst2 {
+        plugin: Arc<Mutex<NativeVst2Plugin>>,
+    },
     Wine {
         channel: Arc<Mutex<WineAudioChannel>>,
     },
@@ -239,6 +249,11 @@ impl PedalDspProcessor {
                             ActivePluginHandle::Native { plugin, .. } => {
                                 if let Ok(mut p) = plugin.try_lock() {
                                     let _ = p.set_parameter_at(id, value, 0);
+                                }
+                            }
+                            ActivePluginHandle::NativeVst2 { plugin } => {
+                                if let Ok(mut p) = plugin.try_lock() {
+                                    let _ = p.set_parameter(id, value);
                                 }
                             }
                             ActivePluginHandle::Wine { channel } => {
@@ -355,6 +370,29 @@ impl StereoAudioProcessor for PedalDspProcessor {
                             }
                         }
                     }
+                    ActivePluginHandle::NativeVst2 { plugin } => {
+                        Self::ensure_wine_scratch(
+                            &mut self.wine_wet_l,
+                            &mut self.wine_wet_r,
+                            frames,
+                        );
+                        if let Ok(mut p) = plugin.try_lock() {
+                            if p.process_stereo(
+                                &out_left[..frames],
+                                &out_right[..frames],
+                                &mut self.wine_wet_l[..frames],
+                                &mut self.wine_wet_r[..frames],
+                                frames,
+                                sample_rate,
+                            ) {
+                                let dry = 1.0 - mix;
+                                for i in 0..frames {
+                                    out_left[i] = out_left[i] * dry + self.wine_wet_l[i] * mix;
+                                    out_right[i] = out_right[i] * dry + self.wine_wet_r[i] * mix;
+                                }
+                            }
+                        }
+                    }
                     ActivePluginHandle::Wine { channel } => {
                         Self::ensure_wine_scratch(
                             &mut self.wine_wet_l,
@@ -424,6 +462,7 @@ struct RecordingHandle {
 
 enum LoadedBackend {
     Native(Arc<Mutex<Plugin>>),
+    NativeVst2(Arc<Mutex<NativeVst2Plugin>>),
     Wine(WineVst3Plugin),
 }
 
@@ -544,6 +583,9 @@ impl PedalEngine {
                 in_channels: meta.input_channels,
                 out_channels: meta.output_channels,
             }),
+            LoadedBackend::NativeVst2(plugin) => Some(ActivePluginHandle::NativeVst2 {
+                plugin: Arc::clone(plugin),
+            }),
             LoadedBackend::Wine(wine) => Some(ActivePluginHandle::Wine {
                 channel: wine.audio_channel(),
             }),
@@ -559,19 +601,58 @@ impl PedalEngine {
         self.cmd_tx = None;
     }
 
+    /// Returns the default program VST folder (`<workspace_or_exe_dir>/vst_plugins`),
+    /// creating it if it does not exist yet.
+    pub fn default_program_vst_dir() -> PathBuf {
+        let candidates = [
+            std::env::current_dir().ok().map(|d| d.join("vst_plugins")),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("vst_plugins"))),
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".local/share/chronomix/vst_plugins")),
+        ];
+        for cand in candidates.into_iter().flatten() {
+            if std::fs::create_dir_all(&cand).is_ok() {
+                return cand.canonicalize().unwrap_or(cand);
+            }
+        }
+        PathBuf::from("vst_plugins")
+    }
+
+    /// Scan a specific VST folder (program folder or custom user folder) for VST2 & VST3 plugins.
+    pub fn discover_vst_in_directory(&self, dir: &Path) -> Vec<PluginInfo> {
+        let _ = std::fs::create_dir_all(dir);
+        discover_vst_targets_in_dir(dir)
+    }
+
+    /// Scan the configured VST folder and optionally standard OS/Wine system VST directories.
+    pub fn discover_plugins(&self, vst_dir: &Path, include_system: bool) -> Vec<PluginInfo> {
+        let mut plugins = self.discover_vst_in_directory(vst_dir);
+        if include_system {
+            for sys_plugin in self.discover_vst3_plugins() {
+                if !plugins.iter().any(|p| p.path == sys_plugin.path) {
+                    plugins.push(sys_plugin);
+                }
+            }
+        }
+        plugins
+    }
+
     /// Scan standard OS VST3 directories safely (isolated subprocess probes prevent bad plugins
-    /// from crashing the host during scan), plus Wine Windows VST3 folders on Linux.
+    /// from crashing the host during scan), plus Wine Windows VST2/VST3 folders on Linux.
     pub fn discover_vst3_plugins(&self) -> Vec<PluginInfo> {
-        let mut plugins = match Vst3Host::new() {
-            Ok(host) => {
-                let report = discover_plugins_safe(&host.scan_plugin_paths(), DEFAULT_PROBE_TIMEOUT);
-                report.plugins.into_iter().map(|d| d.info).collect()
+        let mut plugins = self.discover_vst_in_directory(&Self::default_program_vst_dir());
+
+        if let Ok(host) = Vst3Host::new() {
+            let report = discover_plugins_safe(&host.scan_plugin_paths(), DEFAULT_PROBE_TIMEOUT);
+            for d in report.plugins {
+                if !plugins.iter().any(|p| p.path == d.info.path) {
+                    plugins.push(d.info);
+                }
             }
-            Err(e) => {
-                log::warn!("Failed to initialize Vst3Host for scan: {e}");
-                Vec::new()
-            }
-        };
+        }
 
         #[cfg(target_os = "linux")]
         {
@@ -609,25 +690,69 @@ impl PedalEngine {
                 }
                 Vst3BinaryKind::NativeElf | Vst3BinaryKind::Unknown => {}
             }
-            return self.load_native_vst3_plugin(&target.bundle_or_file);
+
+            let is_standalone_vst2 = is_vst2_extension(&target.bundle_or_file);
+            if is_standalone_vst2 {
+                if let Ok(meta) = self.load_native_vst2_plugin(&target.binary_path) {
+                    return Ok(meta);
+                }
+            }
+            return match self.load_native_vst3_plugin(&target.bundle_or_file) {
+                Ok(meta) => Ok(meta),
+                Err(vst3_err) => {
+                    if let Ok(meta) = self.load_native_vst2_plugin(&target.binary_path) {
+                        Ok(meta)
+                    } else {
+                        Err(vst3_err)
+                    }
+                }
+            };
         }
 
-        if requested_path.is_dir() || has_dll_extension(requested_path) {
-            if contains_vst2_dll(requested_path) {
-                return Err(EngineError::InvalidPluginPath(format!(
-                    "Found .dll (VST2) in '{}', but Chronomix only supports VST3 (.vst3) plugins.",
-                    requested_path.display()
-                )));
-            }
-            if requested_path.is_dir() {
-                return Err(EngineError::InvalidPluginPath(format!(
-                    "No .vst3 plugin found inside folder '{}'",
-                    requested_path.display()
-                )));
+        if requested_path.is_dir() {
+            return Err(EngineError::InvalidPluginPath(format!(
+                "No VST2 (.dll/.so) or VST3 (.vst3) plugin found inside folder '{}'",
+                requested_path.display()
+            )));
+        }
+
+        if is_vst2_extension(requested_path) {
+            if let Ok(meta) = self.load_native_vst2_plugin(requested_path) {
+                return Ok(meta);
             }
         }
 
         self.load_native_vst3_plugin(requested_path)
+    }
+
+    fn load_native_vst2_plugin(&mut self, path: &Path) -> Result<LoadedPluginMeta, EngineError> {
+        let sr = self.sample_rate() as f64;
+        let block = self.block_size;
+
+        let vst2 = crate::vst2::NativeVst2Plugin::load(path, sr, block)
+            .map_err(EngineError::Vst2)?;
+        let info = vst2.info().clone();
+        let in_channels = vst2.input_channels();
+        let out_channels = vst2.output_channels().max(1);
+        let parameters = vst2.get_parameters();
+
+        let meta = LoadedPluginMeta {
+            info,
+            input_channels: in_channels,
+            output_channels: out_channels,
+            parameters,
+            is_wine_bridged: false,
+        };
+
+        let plugin_arc = Arc::new(Mutex::new(vst2));
+        self.loaded_backend = Some(LoadedBackend::NativeVst2(plugin_arc));
+        self.loaded_meta = Some(meta.clone());
+        let handle = self.make_active_handle();
+        if let (Some(tx), Some(handle)) = (&mut self.cmd_tx, handle) {
+            let _ = tx.push(EngineCommand::SetPlugin(Some(handle)));
+        }
+
+        Ok(meta)
     }
 
     fn load_native_vst3_plugin(&mut self, path: &Path) -> Result<LoadedPluginMeta, EngineError> {
@@ -693,7 +818,7 @@ impl PedalEngine {
         let fallback_name = requested_path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("Wine VST3")
+            .unwrap_or("Wine VST")
             .to_string();
 
         let info = PluginInfo {
@@ -704,7 +829,7 @@ impl PedalEngine {
                 wmeta.name.clone()
             },
             vendor: if wmeta.vendor.is_empty() {
-                "Windows VST3 (Wine)".to_string()
+                "Windows VST (Wine)".to_string()
             } else {
                 wmeta.vendor.clone()
             },
@@ -742,10 +867,19 @@ impl PedalEngine {
             let _ = tx.push(EngineCommand::SetPlugin(None));
         }
         if let Some(backend) = self.loaded_backend.take() {
-            if let LoadedBackend::Native(plugin_arc) = backend {
-                if let Ok(mut p) = plugin_arc.lock() {
-                    let _ = p.stop_processing();
+            match backend {
+                LoadedBackend::Native(plugin_arc) => {
+                    if let Ok(mut p) = plugin_arc.lock() {
+                        let _ = p.stop_processing();
+                    }
                 }
+                LoadedBackend::NativeVst2(plugin_arc) => {
+                    if let Ok(mut p) = plugin_arc.lock() {
+                        p.close_editor_window();
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                LoadedBackend::Wine(_) => {}
             }
         }
         self.loaded_meta = None;
@@ -773,6 +907,14 @@ impl PedalEngine {
                     format!("{:.2}", val)
                 }
             }
+            LoadedBackend::NativeVst2(plugin_arc) => {
+                if let Ok(mut plugin) = plugin_arc.try_lock() {
+                    plugin.set_parameter(id, val)
+                } else {
+                    format!("{:.2}", val)
+                }
+            }
+            #[cfg(target_os = "linux")]
             LoadedBackend::Wine(wine) => wine
                 .set_parameter(id, val)
                 .unwrap_or_else(|_| format!("{:.2}", val)),
@@ -799,6 +941,13 @@ impl PedalEngine {
                 };
                 collect_parameters(&plugin)
             }
+            LoadedBackend::NativeVst2(plugin_arc) => {
+                let Ok(plugin) = plugin_arc.try_lock() else {
+                    return;
+                };
+                plugin.get_parameters()
+            }
+            #[cfg(target_os = "linux")]
             LoadedBackend::Wine(wine) => match wine.get_parameters() {
                 Ok(p) => wine_params_to_display(&p),
                 Err(_) => return,
@@ -825,6 +974,13 @@ impl PedalEngine {
                 self.plugin_window = Some(window);
                 Ok(())
             }
+            LoadedBackend::NativeVst2(plugin_arc) => {
+                let mut plugin = plugin_arc
+                    .lock()
+                    .map_err(|_| EngineError::Vst2("VST2 mutex poisoned".into()))?;
+                plugin.open_editor_window().map_err(EngineError::Vst2)
+            }
+            #[cfg(target_os = "linux")]
             LoadedBackend::Wine(wine) => {
                 wine.open_gui()?;
                 Ok(())
@@ -836,8 +992,17 @@ impl PedalEngine {
         if let Some(mut win) = self.plugin_window.take() {
             win.close();
         }
-        if let Some(LoadedBackend::Wine(ref wine)) = self.loaded_backend {
-            wine.close_gui();
+        match self.loaded_backend.as_ref() {
+            Some(LoadedBackend::NativeVst2(plugin_arc)) => {
+                if let Ok(mut plugin) = plugin_arc.lock() {
+                    plugin.close_editor_window();
+                }
+            }
+            #[cfg(target_os = "linux")]
+            Some(LoadedBackend::Wine(wine)) => {
+                wine.close_gui();
+            }
+            _ => {}
         }
     }
 
@@ -847,6 +1012,11 @@ impl PedalEngine {
                 .plugin_window
                 .as_ref()
                 .is_some_and(|w| w.is_open() && !w.closed_by_user()),
+            Some(LoadedBackend::NativeVst2(plugin_arc)) => plugin_arc
+                .try_lock()
+                .map(|p| p.is_editor_window_open())
+                .unwrap_or(true),
+            #[cfg(target_os = "linux")]
             Some(LoadedBackend::Wine(wine)) => wine.is_gui_open(),
             None => false,
         }
@@ -860,6 +1030,11 @@ impl PedalEngine {
                 should_close = true;
             } else if let Err(e) = win.service_platform_events() {
                 log::warn!("Plugin window event error: {e}");
+            }
+        }
+        if let Some(LoadedBackend::NativeVst2(ref plugin_arc)) = self.loaded_backend {
+            if let Ok(mut plugin) = plugin_arc.try_lock() {
+                plugin.service_editor_window();
             }
         }
         if should_close {
@@ -996,91 +1171,86 @@ fn wine_params_to_display(params: &[WineParamInfo]) -> Vec<ParameterDisplay> {
         .collect()
 }
 
+fn discover_vst_targets_in_dir(dir: &Path) -> Vec<PluginInfo> {
+    let mut out = Vec::new();
+    for target in pedal_wine::collect_all_vst_targets(dir) {
+        let is_vst3 = target
+            .bundle_or_file
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("vst3"));
+        let is_wine = matches!(target.kind, Vst3BinaryKind::WindowsPe64);
+        let name = target
+            .bundle_or_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("VST Plugin")
+            .to_string();
+        let (vendor, category) = match (is_vst3, is_wine) {
+            (true, true) => ("Windows VST3 (Wine)".to_string(), "VST3 [Wine]".to_string()),
+            (false, true) => ("Windows VST2 (Wine)".to_string(), "VST2 [Wine]".to_string()),
+            (true, false) => ("Native VST3".to_string(), "VST3".to_string()),
+            (false, false) => ("Native VST2".to_string(), "VST2".to_string()),
+        };
+        out.push(PluginInfo {
+            path: target.bundle_or_file.clone(),
+            name,
+            vendor,
+            version: String::new(),
+            category,
+            uid: format!("vst:{}", target.bundle_or_file.display()),
+            audio_inputs: 1,
+            audio_outputs: 1,
+            has_midi_input: false,
+            has_midi_output: false,
+            has_gui: true,
+        });
+    }
+    out
+}
+
 #[cfg(target_os = "linux")]
 fn discover_wine_vst3_plugins() -> Vec<PluginInfo> {
-    let mut roots = Vec::new();
+    let mut prefixes = Vec::new();
     if let Ok(prefix) = std::env::var("WINEPREFIX") {
         if !prefix.is_empty() {
-            roots.push(PathBuf::from(prefix).join("drive_c/Program Files/Common Files/VST3"));
+            prefixes.push(PathBuf::from(prefix));
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let default_vst3 = PathBuf::from(home).join(".wine/drive_c/Program Files/Common Files/VST3");
-        if !roots.contains(&default_vst3) {
-            roots.push(default_vst3);
+        let default_prefix = PathBuf::from(home).join(".wine");
+        if !prefixes.contains(&default_prefix) {
+            prefixes.push(default_prefix);
         }
     }
 
+    let subdirs = [
+        "drive_c/Program Files/Common Files/VST3",
+        "drive_c/Program Files/VSTPlugins",
+        "drive_c/Program Files/Steinberg/VstPlugins",
+        "drive_c/Program Files/Common Files/VST2",
+    ];
+
     let mut found = Vec::new();
-    for root in roots {
-        if root.is_dir() {
-            scan_wine_vst3_dir(&root, 0, &mut found);
+    for prefix in prefixes {
+        for sub in subdirs {
+            let root = prefix.join(sub);
+            if root.is_dir() {
+                for info in discover_vst_targets_in_dir(&root) {
+                    if !found.iter().any(|p: &PluginInfo| p.path == info.path) {
+                        found.push(info);
+                    }
+                }
+            }
         }
     }
     found
 }
 
-#[cfg(target_os = "linux")]
-fn scan_wine_vst3_dir(dir: &Path, depth: usize, out: &mut Vec<PluginInfo>) {
-    if depth > 3 {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let is_vst3 = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("vst3"));
-        if is_vst3 {
-            if let Some((_, Vst3BinaryKind::WindowsPe64)) = pedal_wine::resolve_vst3_binary(&path) {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Wine VST3")
-                    .to_string();
-                out.push(PluginInfo {
-                    path: path.clone(),
-                    name,
-                    vendor: "Windows VST3 (Wine)".to_string(),
-                    version: String::new(),
-                    category: "Fx".to_string(),
-                    uid: format!("wine:{}", path.display()),
-                    audio_inputs: 1,
-                    audio_outputs: 1,
-                    has_midi_input: false,
-                    has_midi_output: false,
-                    has_gui: true,
-                });
-            }
-        } else if path.is_dir() {
-            scan_wine_vst3_dir(&path, depth + 1, out);
-        }
-    }
-}
-
-fn has_dll_extension(path: &Path) -> bool {
+fn is_vst2_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("dll"))
-}
-
-fn contains_vst2_dll(path: &Path) -> bool {
-    if path.is_file() {
-        return has_dll_extension(path);
-    }
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_file() && has_dll_extension(&p) {
-            return true;
-        }
-    }
-    false
+        .is_some_and(|e| e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("so"))
 }
 
 #[cfg(test)]

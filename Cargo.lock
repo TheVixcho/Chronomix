@@ -2836,6 +2836,8 @@ dependencies = [
  "pedal-audio",
  "pedal-engine",
  "rfd",
+ "serde",
+ "serde_json",
  "vst3-host",
 ]
 
@@ -2854,12 +2856,14 @@ name = "pedal-engine"
 version = "0.1.0"
 dependencies = [
  "hound",
+ "libloading",
  "log",
  "pedal-audio",
  "pedal-wine",
  "rtrb",
  "thiserror 2.0.21",
  "vst3-host",
+ "x11-dl",
 ]
 
 [[package]]

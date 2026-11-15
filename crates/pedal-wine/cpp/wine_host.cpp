@@ -344,6 +344,91 @@ struct IHostApplication : public FUnknown {
 
 } // namespace vst3
 
+namespace vst2 {
+
+constexpr int32_t kEffectMagic = 0x56737450; // 'VstP'
+
+constexpr int32_t effOpen = 0;
+constexpr int32_t effClose = 1;
+constexpr int32_t effGetParamLabel = 6;
+constexpr int32_t effGetParamDisplay = 7;
+constexpr int32_t effGetParamName = 8;
+constexpr int32_t effSetSampleRate = 10;
+constexpr int32_t effSetBlockSize = 11;
+constexpr int32_t effMainsChanged = 12;
+constexpr int32_t effEditGetRect = 13;
+constexpr int32_t effEditOpen = 14;
+constexpr int32_t effEditClose = 15;
+constexpr int32_t effEditIdle = 19;
+constexpr int32_t effGetEffectName = 45;
+constexpr int32_t effGetVendorString = 47;
+constexpr int32_t effGetProductString = 48;
+constexpr int32_t effGetVendorVersion = 49;
+constexpr int32_t effStartProcess = 71;
+constexpr int32_t effStopProcess = 72;
+
+constexpr int32_t effFlagsHasEditor = 1 << 0;
+
+struct ERect {
+    int16_t top;
+    int16_t left;
+    int16_t bottom;
+    int16_t right;
+};
+
+struct VstTimeInfo {
+    double samplePos;
+    double sampleRate;
+    double nanoSeconds;
+    double ppqPos;
+    double tempo;
+    double barStartPos;
+    double cycleStartPos;
+    double cycleEndPos;
+    int32_t timeSigNumerator;
+    int32_t timeSigDenominator;
+    int32_t smpteOffset;
+    int32_t smpteFrameRate;
+    int32_t samplesToNextClock;
+    int32_t flags;
+};
+
+struct AEffect;
+using AudioMasterCallback = intptr_t(*)(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+using DispatcherProc = intptr_t(*)(AEffect* effect, int32_t opcode, int32_t index, intptr_t value, void* ptr, float opt);
+using ProcessProc = void(*)(AEffect* effect, float** inputs, float** outputs, int32_t sampleFrames);
+using SetParameterProc = void(*)(AEffect* effect, int32_t index, float parameter);
+using GetParameterProc = float(*)(AEffect* effect, int32_t index);
+using PluginEntryProc = AEffect*(*)(AudioMasterCallback audioMaster);
+
+struct AEffect {
+    int32_t magic;
+    DispatcherProc dispatcher;
+    ProcessProc process;
+    SetParameterProc setParameter;
+    GetParameterProc getParameter;
+    int32_t numPrograms;
+    int32_t numParams;
+    int32_t numInputs;
+    int32_t numOutputs;
+    int32_t flags;
+    intptr_t resvd1;
+    intptr_t resvd2;
+    int32_t initialDelay;
+    int32_t realQualities;
+    int32_t offQualities;
+    float ioRatio;
+    void* object;
+    void* user;
+    int32_t uniqueID;
+    int32_t version;
+    ProcessProc processReplacing;
+    void* processDoubleReplacing;
+    char future[56];
+};
+
+} // namespace vst2
+
 constexpr uint32_t SHM_MAGIC = 0x4F50454E;
 constexpr size_t SHM_MAX_FRAMES = 4096;
 constexpr size_t SHM_MAX_PARAMS = 128;
@@ -618,7 +703,65 @@ public:
 
 static HWND g_hwnd = nullptr;
 static vst3::IPlugView* g_view = nullptr;
+static vst2::AEffect* g_vst2_effect = nullptr;
+static bool g_vst2_editor_opened = false;
+static vst2::VstTimeInfo g_vst2_time{};
 static std::atomic<bool> g_gui_open{false};
+
+static intptr_t vst2_audio_master_cb(
+    vst2::AEffect*,
+    int32_t opcode,
+    int32_t index,
+    intptr_t value,
+    void* ptr,
+    float opt
+) {
+    switch (opcode) {
+        case 0: { // audioMasterAutomate
+            if (index >= 0) {
+                std::lock_guard<std::mutex> lock(g_edit_mutex);
+                g_gui_edits.push_back({static_cast<uint32_t>(index), std::clamp<double>(opt, 0.0, 1.0)});
+            }
+            return 1;
+        }
+        case 1: // audioMasterVersion
+            return 2400;
+        case 2: // audioMasterCurrentId
+            return 0;
+        case 3: // audioMasterIdle
+            return 0;
+        case 7: // audioMasterGetTime
+            return reinterpret_cast<intptr_t>(&g_vst2_time);
+        case 15: { // audioMasterSizeWindow
+            if (g_hwnd && index > 0 && value > 0) {
+                RECT wr{0, 0, static_cast<LONG>(index), static_cast<LONG>(value)};
+                AdjustWindowRectEx(&wr, static_cast<DWORD>(GetWindowLongW(g_hwnd, GWL_STYLE)), FALSE,
+                                   static_cast<DWORD>(GetWindowLongW(g_hwnd, GWL_EXSTYLE)));
+                SetWindowPos(g_hwnd, nullptr, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return 1;
+        }
+        case 16: // audioMasterGetSampleRate
+            return static_cast<intptr_t>(g_vst2_time.sampleRate > 0.0 ? g_vst2_time.sampleRate : 48000.0);
+        case 17: // audioMasterGetBlockSize
+            return static_cast<intptr_t>(SHM_MAX_FRAMES);
+        case 23: // audioMasterGetCurrentProcessLevel
+            return 0;
+        case 32: // audioMasterGetVendorString
+            if (ptr) std::strcpy(static_cast<char*>(ptr), "Chronomix");
+            return 1;
+        case 33: // audioMasterGetProductString
+            if (ptr) std::strcpy(static_cast<char*>(ptr), "Chronomix DAW");
+            return 1;
+        case 34: // audioMasterGetVendorVersion
+            return 1000;
+        case 37: // audioMasterCanDo
+            return 1;
+        default:
+            return 0;
+    }
+}
 
 class PlugFrame final : public vst3::IPlugFrame {
 public:
@@ -711,6 +854,7 @@ struct AudioThreadArgs {
     int audio_fd;
     ShmAudioBlock* shm;
     vst3::IAudioProcessor* processor;
+    vst2::AEffect* vst2_effect;
     int32_t in_channels;
     int32_t out_channels;
     std::atomic<bool>* running;
@@ -725,9 +869,19 @@ static DWORD WINAPI audio_thread_entry(LPVOID raw) {
     HostEventList in_events;
     HostEventList out_events;
     std::vector<float> mono_in(SHM_MAX_FRAMES, 0.0f);
+    std::vector<float> silence_in(SHM_MAX_FRAMES, 0.0f);
+    std::vector<float> extra_out(SHM_MAX_FRAMES, 0.0f);
 
-    float* in_ptrs[2] = {args->shm->in_l, args->shm->in_r};
-    float* out_ptrs[2] = {args->shm->out_l, args->shm->out_r};
+    float* in_ptrs[16] = {};
+    float* out_ptrs[16] = {};
+    for (int i = 0; i < 16; ++i) {
+        in_ptrs[i] = silence_in.data();
+        out_ptrs[i] = extra_out.data();
+    }
+    in_ptrs[0] = args->shm->in_l;
+    in_ptrs[1] = args->shm->in_r;
+    out_ptrs[0] = args->shm->out_l;
+    out_ptrs[1] = args->shm->out_r;
 
     vst3::AudioBusBuffers in_bus{};
     vst3::AudioBusBuffers out_bus{};
@@ -761,6 +915,7 @@ static DWORD WINAPI audio_thread_entry(LPVOID raw) {
         uint32_t frames = std::min<uint32_t>(args->shm->num_samples, SHM_MAX_FRAMES);
         double sr = args->shm->sample_rate > 0.0 ? args->shm->sample_rate : 48000.0;
         ctx.sampleRate = sr;
+        g_vst2_time.sampleRate = sr;
         data.numSamples = static_cast<int32_t>(frames);
 
         if (args->in_channels == 1) {
@@ -779,14 +934,6 @@ static DWORD WINAPI audio_thread_entry(LPVOID raw) {
         std::memset(args->shm->out_l, 0, frames * sizeof(float));
         std::memset(args->shm->out_r, 0, frames * sizeof(float));
 
-        in_bus.numChannels = args->in_channels;
-        in_bus.silenceFlags = 0;
-        in_bus.channelBuffers32 = in_ptrs;
-
-        out_bus.numChannels = args->out_channels;
-        out_bus.silenceFlags = 0;
-        out_bus.channelBuffers32 = out_ptrs;
-
         param_changes.clear();
         out_param_changes.clear();
         uint32_t pcount = std::min<uint32_t>(args->shm->pending_param_count, SHM_MAX_PARAMS);
@@ -803,12 +950,50 @@ static DWORD WINAPI audio_thread_entry(LPVOID raw) {
             g_gui_edits.clear();
         }
 
-        vst3::tresult res = args->processor->process(&data);
-        ctx.projectTimeSamples += frames;
-        ctx.continousTimeSamples += frames;
-        ctx.projectTimeMusic += (static_cast<double>(frames) / sr) * (ctx.tempo / 60.0);
+        uint8_t ack = 0;
+        if (args->vst2_effect) {
+            vst2::AEffect* eff = args->vst2_effect;
+            if (eff->setParameter) {
+                for (int32_t i = 0; i < param_changes.count; ++i) {
+                    if (param_changes.queues[i].active) {
+                        eff->setParameter(
+                            eff,
+                            static_cast<int32_t>(param_changes.queues[i].id),
+                            static_cast<float>(param_changes.queues[i].value)
+                        );
+                    }
+                }
+            }
+            if (eff->processReplacing) {
+                eff->processReplacing(eff, in_ptrs, out_ptrs, static_cast<int32_t>(frames));
+                if (args->out_channels == 1) {
+                    std::memcpy(args->shm->out_r, args->shm->out_l, frames * sizeof(float));
+                }
+                ack = 1;
+            } else if (eff->process) {
+                eff->process(eff, in_ptrs, out_ptrs, static_cast<int32_t>(frames));
+                if (args->out_channels == 1) {
+                    std::memcpy(args->shm->out_r, args->shm->out_l, frames * sizeof(float));
+                }
+                ack = 1;
+            }
+            g_vst2_time.samplePos += frames;
+        } else if (args->processor) {
+            in_bus.numChannels = args->in_channels;
+            in_bus.silenceFlags = 0;
+            in_bus.channelBuffers32 = in_ptrs;
 
-        uint8_t ack = (res >= 0) ? 1 : 0;
+            out_bus.numChannels = args->out_channels;
+            out_bus.silenceFlags = 0;
+            out_bus.channelBuffers32 = out_ptrs;
+
+            vst3::tresult res = args->processor->process(&data);
+            ctx.projectTimeSamples += frames;
+            ctx.continousTimeSamples += frames;
+            ctx.projectTimeMusic += (static_cast<double>(frames) / sr) * (ctx.tempo / 60.0);
+            ack = (res >= 0) ? 1 : 0;
+        }
+
         if (!write_all(args->audio_fd, &ack, 1)) break;
     }
     return 0;
@@ -863,6 +1048,64 @@ static std::string build_params_json(vst3::IEditController* ctrl) {
            << "\"is_read_only\":" << ((info.flags & 2) ? "true" : "false") << ","
            << "\"is_bypass\":" << ((info.flags & 65536) ? "true" : "false") << ","
            << "\"flags\":" << info.flags << ","
+           << "\"formatted\":\"" << json_escape(formatted) << "\""
+           << "}";
+    }
+    os << "]";
+    return os.str();
+}
+
+static std::string format_vst2_param(vst2::AEffect* eff, int32_t idx, float val) {
+    if (!eff || !eff->dispatcher) return "0.00";
+    char disp[64] = {};
+    char label[64] = {};
+    eff->dispatcher(eff, vst2::effGetParamDisplay, idx, 0, disp, 0.0f);
+    eff->dispatcher(eff, vst2::effGetParamLabel, idx, 0, label, 0.0f);
+    disp[63] = '\0';
+    label[63] = '\0';
+    std::string out = disp;
+    if (out.empty()) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(val));
+        out = buf;
+    }
+    if (label[0] != '\0') {
+        out += " ";
+        out += label;
+    }
+    return out;
+}
+
+static std::string build_vst2_params_json(vst2::AEffect* eff) {
+    if (!eff || !eff->dispatcher) return "[]";
+    int32_t count = std::clamp<int32_t>(eff->numParams, 0, 2048);
+    std::ostringstream os;
+    os << "[";
+    for (int32_t i = 0; i < count; ++i) {
+        if (i > 0) os << ",";
+        char name_buf[64] = {};
+        char unit_buf[64] = {};
+        eff->dispatcher(eff, vst2::effGetParamName, i, 0, name_buf, 0.0f);
+        eff->dispatcher(eff, vst2::effGetParamLabel, i, 0, unit_buf, 0.0f);
+        name_buf[63] = '\0';
+        unit_buf[63] = '\0';
+        std::string pname = name_buf;
+        if (pname.empty()) {
+            pname = "Param " + std::to_string(i + 1);
+        }
+        float val = eff->getParameter ? std::clamp(eff->getParameter(eff, i), 0.0f, 1.0f) : 0.0f;
+        std::string formatted = format_vst2_param(eff, i, val);
+        os << "{"
+           << "\"id\":" << i << ","
+           << "\"name\":\"" << json_escape(pname) << "\","
+           << "\"value\":" << static_cast<double>(val) << ","
+           << "\"default\":" << static_cast<double>(val) << ","
+           << "\"unit\":\"" << json_escape(unit_buf) << "\","
+           << "\"step_count\":0,"
+           << "\"can_automate\":true,"
+           << "\"is_read_only\":false,"
+           << "\"is_bypass\":false,"
+           << "\"flags\":1,"
            << "\"formatted\":\"" << json_escape(formatted) << "\""
            << "}";
     }
@@ -933,178 +1176,236 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     if (auto init_fn = reinterpret_cast<InitDllFn>(reinterpret_cast<void*>(GetProcAddress(mod, "InitDll")))) {
         init_fn();
     }
+
     auto get_factory = reinterpret_cast<GetFactoryFn>(reinterpret_cast<void*>(GetProcAddress(mod, "GetPluginFactory")));
-    if (!get_factory) {
-        send_err("GetPluginFactory symbol not found in Windows VST3 DLL");
+    auto vst2_entry = reinterpret_cast<vst2::PluginEntryProc>(reinterpret_cast<void*>(GetProcAddress(mod, "VSTPluginMain")));
+    if (!vst2_entry) {
+        vst2_entry = reinterpret_cast<vst2::PluginEntryProc>(reinterpret_cast<void*>(GetProcAddress(mod, "main")));
+    }
+
+    if (!get_factory && !vst2_entry) {
+        send_err("Neither GetPluginFactory (VST3) nor VSTPluginMain (VST2) found in Windows DLL");
         FreeLibrary(mod);
         return 7;
     }
 
-    vst3::IPluginFactory* factory = get_factory();
-    if (!factory) {
-        send_err("GetPluginFactory returned null");
-        FreeLibrary(mod);
-        return 8;
-    }
-
-    vst3::PFactoryInfo finfo{};
-    factory->getFactoryInfo(&finfo);
-
-    vst3::IPluginFactory2* factory2 = nullptr;
-    factory->queryInterface(&vst3::IID_IPluginFactory2, reinterpret_cast<void**>(&factory2));
-
-    vst3::TUID plugin_cid{};
-    std::string plugin_name = "Windows VST3";
-    std::string plugin_vendor = finfo.vendor;
-    std::string plugin_version = "1.0";
-    std::string plugin_category = "Fx";
-    bool found_class = false;
-
-    int32_t class_count = factory->countClasses();
-    for (int32_t i = 0; i < class_count; ++i) {
-        vst3::PClassInfo ci{};
-        if (factory->getClassInfo(i, &ci) != vst3::kResultOk) continue;
-        if (std::strcmp(ci.category, "Audio Module Class") == 0) {
-            plugin_cid = ci.cid;
-            plugin_name = ci.name;
-            found_class = true;
-            if (factory2) {
-                vst3::PClassInfo2 ci2{};
-                if (factory2->getClassInfo2(i, &ci2) == vst3::kResultOk) {
-                    if (ci2.vendor[0]) plugin_vendor = ci2.vendor;
-                    if (ci2.version[0]) plugin_version = ci2.version;
-                    if (ci2.subCategories[0]) plugin_category = ci2.subCategories;
-                }
-            }
-            break;
-        }
-    }
-    if (factory2) factory2->release();
-
-    if (!found_class) {
-        send_err("No Audio Module Class found inside VST3");
-        factory->release();
-        FreeLibrary(mod);
-        return 9;
-    }
-
+    vst3::IPluginFactory* factory = nullptr;
     vst3::IComponent* component = nullptr;
-    if (factory->createInstance(reinterpret_cast<const char*>(&plugin_cid),
-                                reinterpret_cast<const char*>(&vst3::IID_IComponent),
-                                reinterpret_cast<void**>(&component)) != vst3::kResultOk ||
-        !component) {
-        send_err("Failed to create IComponent instance");
-        factory->release();
-        FreeLibrary(mod);
-        return 10;
-    }
-
-    HostApplication host_app;
-    if (component->initialize(&host_app) != vst3::kResultOk) {
-        send_err("IComponent::initialize failed");
-        component->release();
-        factory->release();
-        FreeLibrary(mod);
-        return 11;
-    }
-
     vst3::IAudioProcessor* processor = nullptr;
-    if (component->queryInterface(&vst3::IID_IAudioProcessor, reinterpret_cast<void**>(&processor)) != vst3::kResultOk ||
-        !processor) {
-        send_err("Plugin does not implement IAudioProcessor");
-        component->terminate();
-        component->release();
-        factory->release();
-        FreeLibrary(mod);
-        return 12;
-    }
-
     vst3::IEditController* controller = nullptr;
-    bool separate_controller = false;
-    if (component->queryInterface(&vst3::IID_IEditController, reinterpret_cast<void**>(&controller)) != vst3::kResultOk ||
-        !controller) {
-        vst3::TUID ctrl_cid{};
-        if (component->getControllerClassId(&ctrl_cid) == vst3::kResultOk) {
-            if (factory->createInstance(reinterpret_cast<const char*>(&ctrl_cid),
-                                        reinterpret_cast<const char*>(&vst3::IID_IEditController),
-                                        reinterpret_cast<void**>(&controller)) == vst3::kResultOk &&
-                controller) {
-                separate_controller = true;
-                controller->initialize(&host_app);
-            }
-        }
-    }
-
-    ComponentHandler handler;
-    if (controller) {
-        controller->setComponentHandler(&handler);
-    }
-
     vst3::IConnectionPoint* comp_cp = nullptr;
     vst3::IConnectionPoint* ctrl_cp = nullptr;
-    if (separate_controller && controller &&
-        component->queryInterface(&vst3::IID_IConnectionPoint, reinterpret_cast<void**>(&comp_cp)) == vst3::kResultOk &&
-        controller->queryInterface(&vst3::IID_IConnectionPoint, reinterpret_cast<void**>(&ctrl_cp)) == vst3::kResultOk &&
-        comp_cp && ctrl_cp) {
-        comp_cp->connect(ctrl_cp);
-        ctrl_cp->connect(comp_cp);
-    }
+    bool separate_controller = false;
+    HostApplication host_app;
+    ComponentHandler handler;
 
+    std::string plugin_name = "Windows VST";
+    std::string plugin_vendor = "Windows VST (Wine)";
+    std::string plugin_version = "1.0";
+    std::string plugin_category = "Fx";
     int32_t in_ch = 2;
     int32_t out_ch = 2;
-    if (component->getBusCount(vst3::kMediaAudio, vst3::kDirInput) > 0) {
-        vst3::BusInfo bi{};
-        if (component->getBusInfo(vst3::kMediaAudio, vst3::kDirInput, 0, &bi) == vst3::kResultOk) {
-            in_ch = std::clamp<int32_t>(bi.channelCount, 1, 2);
-        }
-    } else {
-        in_ch = 0;
-    }
-    if (component->getBusCount(vst3::kMediaAudio, vst3::kDirOutput) > 0) {
-        vst3::BusInfo bi{};
-        if (component->getBusInfo(vst3::kMediaAudio, vst3::kDirOutput, 0, &bi) == vst3::kResultOk) {
-            out_ch = std::clamp<int32_t>(bi.channelCount, 1, 2);
-        }
-    } else {
-        out_ch = 0;
-    }
+    bool has_gui = false;
 
-    if (in_ch > 0 && out_ch > 0) {
-        vst3::SpeakerArrangement stereo = 0x3ULL;
-        vst3::SpeakerArrangement mono = 0x1ULL;
-        if (processor->setBusArrangements(&stereo, 1, &stereo, 1) == vst3::kResultOk) {
-            in_ch = 2;
-            out_ch = 2;
-        } else if (processor->setBusArrangements(&mono, 1, &stereo, 1) == vst3::kResultOk) {
-            in_ch = 1;
-            out_ch = 2;
+    if (get_factory) {
+        factory = get_factory();
+        if (!factory) {
+            send_err("GetPluginFactory returned null");
+            FreeLibrary(mod);
+            return 8;
+        }
+
+        vst3::PFactoryInfo finfo{};
+        factory->getFactoryInfo(&finfo);
+        if (finfo.vendor[0]) plugin_vendor = finfo.vendor;
+
+        vst3::IPluginFactory2* factory2 = nullptr;
+        factory->queryInterface(&vst3::IID_IPluginFactory2, reinterpret_cast<void**>(&factory2));
+
+        vst3::TUID plugin_cid{};
+        bool found_class = false;
+
+        int32_t class_count = factory->countClasses();
+        for (int32_t i = 0; i < class_count; ++i) {
+            vst3::PClassInfo ci{};
+            if (factory->getClassInfo(i, &ci) != vst3::kResultOk) continue;
+            if (std::strcmp(ci.category, "Audio Module Class") == 0) {
+                plugin_cid = ci.cid;
+                plugin_name = ci.name;
+                found_class = true;
+                if (factory2) {
+                    vst3::PClassInfo2 ci2{};
+                    if (factory2->getClassInfo2(i, &ci2) == vst3::kResultOk) {
+                        if (ci2.vendor[0]) plugin_vendor = ci2.vendor;
+                        if (ci2.version[0]) plugin_version = ci2.version;
+                        if (ci2.subCategories[0]) plugin_category = ci2.subCategories;
+                    }
+                }
+                break;
+            }
+        }
+        if (factory2) factory2->release();
+
+        if (!found_class) {
+            send_err("No Audio Module Class found inside VST3");
+            factory->release();
+            FreeLibrary(mod);
+            return 9;
+        }
+
+        if (factory->createInstance(reinterpret_cast<const char*>(&plugin_cid),
+                                    reinterpret_cast<const char*>(&vst3::IID_IComponent),
+                                    reinterpret_cast<void**>(&component)) != vst3::kResultOk ||
+            !component) {
+            send_err("Failed to create IComponent instance");
+            factory->release();
+            FreeLibrary(mod);
+            return 10;
+        }
+
+        if (component->initialize(&host_app) != vst3::kResultOk) {
+            send_err("IComponent::initialize failed");
+            component->release();
+            factory->release();
+            FreeLibrary(mod);
+            return 11;
+        }
+
+        if (component->queryInterface(&vst3::IID_IAudioProcessor, reinterpret_cast<void**>(&processor)) != vst3::kResultOk ||
+            !processor) {
+            send_err("Plugin does not implement IAudioProcessor");
+            component->terminate();
+            component->release();
+            factory->release();
+            FreeLibrary(mod);
+            return 12;
+        }
+
+        if (component->queryInterface(&vst3::IID_IEditController, reinterpret_cast<void**>(&controller)) != vst3::kResultOk ||
+            !controller) {
+            vst3::TUID ctrl_cid{};
+            if (component->getControllerClassId(&ctrl_cid) == vst3::kResultOk) {
+                if (factory->createInstance(reinterpret_cast<const char*>(&ctrl_cid),
+                                            reinterpret_cast<const char*>(&vst3::IID_IEditController),
+                                            reinterpret_cast<void**>(&controller)) == vst3::kResultOk &&
+                    controller) {
+                    separate_controller = true;
+                    controller->initialize(&host_app);
+                }
+            }
+        }
+
+        if (controller) {
+            controller->setComponentHandler(&handler);
+        }
+
+        if (separate_controller && controller &&
+            component->queryInterface(&vst3::IID_IConnectionPoint, reinterpret_cast<void**>(&comp_cp)) == vst3::kResultOk &&
+            controller->queryInterface(&vst3::IID_IConnectionPoint, reinterpret_cast<void**>(&ctrl_cp)) == vst3::kResultOk &&
+            comp_cp && ctrl_cp) {
+            comp_cp->connect(ctrl_cp);
+            ctrl_cp->connect(comp_cp);
+        }
+
+        if (component->getBusCount(vst3::kMediaAudio, vst3::kDirInput) > 0) {
+            vst3::BusInfo bi{};
+            if (component->getBusInfo(vst3::kMediaAudio, vst3::kDirInput, 0, &bi) == vst3::kResultOk) {
+                in_ch = std::clamp<int32_t>(bi.channelCount, 1, 2);
+            }
         } else {
-            vst3::SpeakerArrangement in_arr = (in_ch == 1) ? mono : stereo;
-            vst3::SpeakerArrangement out_arr = (out_ch == 1) ? mono : stereo;
-            processor->setBusArrangements(&in_arr, 1, &out_arr, 1);
+            in_ch = 0;
         }
-    }
-
-    vst3::ProcessSetup setup{vst3::kRealtime, vst3::kSample32, static_cast<int32_t>(SHM_MAX_FRAMES), sample_rate};
-    processor->setupProcessing(&setup);
-
-    if (in_ch > 0) component->activateBus(vst3::kMediaAudio, vst3::kDirInput, 0, 1);
-    if (out_ch > 0) component->activateBus(vst3::kMediaAudio, vst3::kDirOutput, 0, 1);
-
-    if (separate_controller && controller) {
-        HostMemoryStream init_state;
-        if (component->getState(&init_state) == vst3::kResultOk && !init_state.data.empty()) {
-            init_state.cursor = 0;
-            controller->setComponentState(&init_state);
+        if (component->getBusCount(vst3::kMediaAudio, vst3::kDirOutput) > 0) {
+            vst3::BusInfo bi{};
+            if (component->getBusInfo(vst3::kMediaAudio, vst3::kDirOutput, 0, &bi) == vst3::kResultOk) {
+                out_ch = std::clamp<int32_t>(bi.channelCount, 1, 2);
+            }
+        } else {
+            out_ch = 0;
         }
+
+        if (in_ch > 0 && out_ch > 0) {
+            vst3::SpeakerArrangement stereo = 0x3ULL;
+            vst3::SpeakerArrangement mono = 0x1ULL;
+            if (processor->setBusArrangements(&stereo, 1, &stereo, 1) == vst3::kResultOk) {
+                in_ch = 2;
+                out_ch = 2;
+            } else if (processor->setBusArrangements(&mono, 1, &stereo, 1) == vst3::kResultOk) {
+                in_ch = 1;
+                out_ch = 2;
+            } else {
+                vst3::SpeakerArrangement in_arr = (in_ch == 1) ? mono : stereo;
+                vst3::SpeakerArrangement out_arr = (out_ch == 1) ? mono : stereo;
+                processor->setBusArrangements(&in_arr, 1, &out_arr, 1);
+            }
+        }
+
+        vst3::ProcessSetup setup{vst3::kRealtime, vst3::kSample32, static_cast<int32_t>(SHM_MAX_FRAMES), sample_rate};
+        processor->setupProcessing(&setup);
+
+        if (in_ch > 0) component->activateBus(vst3::kMediaAudio, vst3::kDirInput, 0, 1);
+        if (out_ch > 0) component->activateBus(vst3::kMediaAudio, vst3::kDirOutput, 0, 1);
+
+        if (separate_controller && controller) {
+            HostMemoryStream init_state;
+            if (component->getState(&init_state) == vst3::kResultOk && !init_state.data.empty()) {
+                init_state.cursor = 0;
+                controller->setComponentState(&init_state);
+            }
+        }
+
+        component->setActive(1);
+        processor->setProcessing(1);
+        has_gui = (controller != nullptr);
+    } else {
+        g_vst2_time.sampleRate = sample_rate;
+        g_vst2_time.tempo = 120.0;
+        g_vst2_time.timeSigNumerator = 4;
+        g_vst2_time.timeSigDenominator = 4;
+        g_vst2_time.flags = (1 << 9) | (1 << 10) | (1 << 13);
+
+        g_vst2_effect = vst2_entry(&vst2_audio_master_cb);
+        if (!g_vst2_effect || g_vst2_effect->magic != vst2::kEffectMagic || !g_vst2_effect->dispatcher) {
+            send_err("VSTPluginMain did not return a valid VST2 AEffect (VstP)");
+            FreeLibrary(mod);
+            return 13;
+        }
+
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effOpen, 0, 0, nullptr, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effSetSampleRate, 0, 0, nullptr, static_cast<float>(sample_rate));
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effSetBlockSize, 0, static_cast<intptr_t>(SHM_MAX_FRAMES), nullptr, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effMainsChanged, 0, 1, nullptr, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effStartProcess, 0, 0, nullptr, 0.0f);
+
+        char eff_name[64] = {};
+        char prod_name[64] = {};
+        char vend_name[64] = {};
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effGetEffectName, 0, 0, eff_name, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effGetProductString, 0, 0, prod_name, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effGetVendorString, 0, 0, vend_name, 0.0f);
+        eff_name[63] = '\0';
+        prod_name[63] = '\0';
+        vend_name[63] = '\0';
+
+        if (eff_name[0]) {
+            plugin_name = eff_name;
+        } else if (prod_name[0]) {
+            plugin_name = prod_name;
+        } else {
+            plugin_name = "Windows VST2";
+        }
+        plugin_vendor = vend_name[0] ? vend_name : "Windows VST2 (Wine)";
+        plugin_version = "2.4";
+        plugin_category = "VST2 Fx";
+        in_ch = std::clamp<int32_t>(g_vst2_effect->numInputs, 0, 2);
+        out_ch = std::clamp<int32_t>(g_vst2_effect->numOutputs, 1, 2);
+        has_gui = (g_vst2_effect->flags & vst2::effFlagsHasEditor) != 0;
     }
-
-    component->setActive(1);
-    processor->setProcessing(1);
-
-    bool has_gui = (controller != nullptr);
 
     {
+        std::string params_json = g_vst2_effect
+            ? build_vst2_params_json(g_vst2_effect)
+            : build_params_json(controller);
         std::ostringstream os;
         os << "{"
            << "\"name\":\"" << json_escape(plugin_name) << "\","
@@ -1114,14 +1415,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
            << "\"in_channels\":" << in_ch << ","
            << "\"out_channels\":" << out_ch << ","
            << "\"has_gui\":" << (has_gui ? "true" : "false") << ","
-           << "\"params\":" << build_params_json(controller)
+           << "\"params\":" << params_json
            << "}\n";
         std::string init_json = os.str();
         write_all(ctrl_fd, init_json.data(), init_json.size());
     }
 
     std::atomic<bool> running{true};
-    AudioThreadArgs audio_args{audio_fd, shm, processor, in_ch, out_ch, &running};
+    AudioThreadArgs audio_args{audio_fd, shm, processor, g_vst2_effect, in_ch, out_ch, &running};
     HANDLE audio_thread = CreateThread(nullptr, 0, audio_thread_entry, &audio_args, 0, nullptr);
 
     auto write_str = [](int fd, const std::string& s) {
@@ -1151,6 +1452,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             DispatchMessageW(&msg);
         }
 
+        if (g_gui_open.load() && g_vst2_effect && g_vst2_effect->dispatcher) {
+            g_vst2_effect->dispatcher(g_vst2_effect, vst2::effEditIdle, 0, 0, nullptr, 0.0f);
+        }
+
         pollfd pfd{ctrl_fd, POLLIN, 0};
         if (poll(&pfd, 1, 8) > 0 && (pfd.revents & POLLIN)) {
             ssize_t n = read(ctrl_fd, tmp, sizeof(tmp));
@@ -1168,30 +1473,43 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                     running.store(false);
                     break;
                 } else if (cmd == "GET_PARAMS") {
-                    std::string reply = build_params_json(controller) + "\n";
+                    std::string reply = (g_vst2_effect
+                        ? build_vst2_params_json(g_vst2_effect)
+                        : build_params_json(controller)) + "\n";
                     write_all(ctrl_fd, reply.data(), reply.size());
                 } else if (cmd.rfind("SET_PARAM ", 0) == 0) {
                     uint32_t id = 0;
                     double val = 0.0;
-                    if (std::sscanf(cmd.c_str() + 10, "%u %lf", &id, &val) == 2 && controller) {
-                        controller->setParamNormalized(id, val);
-                        vst3::String128 str{};
-                        std::string formatted;
-                        if (controller->getParamStringByValue(id, val, &str) == vst3::kResultOk) {
-                            formatted = utf16_to_utf8(str);
+                    if (std::sscanf(cmd.c_str() + 10, "%u %lf", &id, &val) == 2) {
+                        if (g_vst2_effect) {
+                            float fval = static_cast<float>(std::clamp(val, 0.0, 1.0));
+                            if (g_vst2_effect->setParameter) {
+                                g_vst2_effect->setParameter(g_vst2_effect, static_cast<int32_t>(id), fval);
+                            }
+                            std::string reply = format_vst2_param(g_vst2_effect, static_cast<int32_t>(id), fval) + "\n";
+                            write_str(ctrl_fd, reply);
+                        } else if (controller) {
+                            controller->setParamNormalized(id, val);
+                            vst3::String128 str{};
+                            std::string formatted;
+                            if (controller->getParamStringByValue(id, val, &str) == vst3::kResultOk) {
+                                formatted = utf16_to_utf8(str);
+                            }
+                            if (formatted.empty()) {
+                                char fbuf[32];
+                                std::snprintf(fbuf, sizeof(fbuf), "%.2f", val);
+                                formatted = fbuf;
+                            }
+                            std::string reply = formatted + "\n";
+                            write_all(ctrl_fd, reply.data(), reply.size());
+                        } else {
+                            write_all(ctrl_fd, "\n", 1);
                         }
-                        if (formatted.empty()) {
-                            char fbuf[32];
-                            std::snprintf(fbuf, sizeof(fbuf), "%.2f", val);
-                            formatted = fbuf;
-                        }
-                        std::string reply = formatted + "\n";
-                        write_all(ctrl_fd, reply.data(), reply.size());
                     } else {
                         write_all(ctrl_fd, "\n", 1);
                     }
                 } else if (cmd == "OPEN_GUI") {
-                    if (g_hwnd && g_view) {
+                    if (g_hwnd && (g_view || g_vst2_editor_opened)) {
                         ShowWindow(g_hwnd, SW_SHOWNORMAL);
                         UpdateWindow(g_hwnd);
                         SetForegroundWindow(g_hwnd);
@@ -1199,6 +1517,55 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                         write_str(ctrl_fd, "OK\n");
                     } else if (wnd_cls == 0) {
                         write_str(ctrl_fd, "ERR: RegisterClassExW failed (" + std::to_string(wnd_reg_err) + ")\n");
+                    } else if (g_vst2_effect) {
+                        if ((g_vst2_effect->flags & vst2::effFlagsHasEditor) == 0) {
+                            write_str(ctrl_fd, "ERR: VST2 plugin does not have a native GUI editor\n");
+                        } else {
+                            vst2::ERect* erect = nullptr;
+                            g_vst2_effect->dispatcher(g_vst2_effect, vst2::effEditGetRect, 0, 0, &erect, 0.0f);
+                            int w = erect ? std::max(200, static_cast<int>(erect->right - erect->left)) : 640;
+                            int h = erect ? std::max(150, static_cast<int>(erect->bottom - erect->top)) : 420;
+                            DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+                            RECT wr{0, 0, w, h};
+                            AdjustWindowRectEx(&wr, style, FALSE, 0);
+                            std::wstring title = L"Chronomix [Wine VST2] - " +
+                                std::wstring(plugin_name.begin(), plugin_name.end());
+                            g_hwnd = CreateWindowExW(
+                                0, wc.lpszClassName, title.c_str(), style,
+                                CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top,
+                                nullptr, nullptr, wnd_hinst, nullptr);
+                            if (!g_hwnd) {
+                                DWORD err = GetLastError();
+                                std::string hint = (err == 1400) ? " - no Wine display driver / DISPLAY" : "";
+                                write_str(ctrl_fd, "ERR: CreateWindowExW failed (" +
+                                    std::to_string(err) + hint + ")\n");
+                            } else {
+                                g_vst2_effect->dispatcher(g_vst2_effect, vst2::effEditOpen, 0, 0, g_hwnd, 0.0f);
+                                g_vst2_editor_opened = true;
+                                vst2::ERect* post_erect = nullptr;
+                                g_vst2_effect->dispatcher(g_vst2_effect, vst2::effEditGetRect, 0, 0, &post_erect, 0.0f);
+                                if (post_erect) {
+                                    int pw = std::max(200, static_cast<int>(post_erect->right - post_erect->left));
+                                    int ph = std::max(150, static_cast<int>(post_erect->bottom - post_erect->top));
+                                    if (pw != w || ph != h) {
+                                        RECT pwr{0, 0, pw, ph};
+                                        AdjustWindowRectEx(&pwr, style, FALSE, 0);
+                                        SetWindowPos(g_hwnd, nullptr, 0, 0, pwr.right - pwr.left, pwr.bottom - pwr.top,
+                                                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                                    }
+                                }
+                                ShowWindow(g_hwnd, SW_SHOWNORMAL);
+                                UpdateWindow(g_hwnd);
+                                SetForegroundWindow(g_hwnd);
+                                MSG m;
+                                while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+                                    TranslateMessage(&m);
+                                    DispatchMessageW(&m);
+                                }
+                                g_gui_open.store(true);
+                                write_str(ctrl_fd, "OK\n");
+                            }
+                        }
                     } else if (controller) {
                         g_view = controller->createView("editor");
                         if (!g_view) {
@@ -1292,34 +1659,51 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         CloseHandle(audio_thread);
     }
 
-    if (g_view) {
-        g_view->removed();
-        g_view->setFrame(nullptr);
-        g_view->release();
-        g_view = nullptr;
-    }
-    if (g_hwnd) {
-        DestroyWindow(g_hwnd);
-        g_hwnd = nullptr;
-    }
+    if (g_vst2_effect) {
+        if (g_vst2_editor_opened) {
+            g_vst2_effect->dispatcher(g_vst2_effect, vst2::effEditClose, 0, 0, nullptr, 0.0f);
+            g_vst2_editor_opened = false;
+        }
+        if (g_hwnd) {
+            DestroyWindow(g_hwnd);
+            g_hwnd = nullptr;
+        }
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effStopProcess, 0, 0, nullptr, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effMainsChanged, 0, 0, nullptr, 0.0f);
+        g_vst2_effect->dispatcher(g_vst2_effect, vst2::effClose, 0, 0, nullptr, 0.0f);
+        g_vst2_effect = nullptr;
+    } else {
+        if (g_view) {
+            g_view->removed();
+            g_view->setFrame(nullptr);
+            g_view->release();
+            g_view = nullptr;
+        }
+        if (g_hwnd) {
+            DestroyWindow(g_hwnd);
+            g_hwnd = nullptr;
+        }
 
-    processor->setProcessing(0);
-    component->setActive(0);
-    if (comp_cp && ctrl_cp) {
-        comp_cp->disconnect(ctrl_cp);
-        ctrl_cp->disconnect(comp_cp);
+        if (processor) processor->setProcessing(0);
+        if (component) component->setActive(0);
+        if (comp_cp && ctrl_cp) {
+            comp_cp->disconnect(ctrl_cp);
+            ctrl_cp->disconnect(comp_cp);
+        }
+        if (comp_cp) comp_cp->release();
+        if (ctrl_cp) ctrl_cp->release();
+        if (controller) {
+            controller->setComponentHandler(nullptr);
+            if (separate_controller) controller->terminate();
+            controller->release();
+        }
+        if (processor) processor->release();
+        if (component) {
+            component->terminate();
+            component->release();
+        }
+        if (factory) factory->release();
     }
-    if (comp_cp) comp_cp->release();
-    if (ctrl_cp) ctrl_cp->release();
-    if (controller) {
-        controller->setComponentHandler(nullptr);
-        if (separate_controller) controller->terminate();
-        controller->release();
-    }
-    processor->release();
-    component->terminate();
-    component->release();
-    factory->release();
     if (auto exit_fn = reinterpret_cast<ExitDllFn>(reinterpret_cast<void*>(GetProcAddress(mod, "ExitDll")))) {
         exit_fn();
     }

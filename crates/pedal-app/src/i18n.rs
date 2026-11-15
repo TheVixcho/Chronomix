@@ -66,15 +66,29 @@ impl Lang {
 
     pub fn scan_complete_status(self, count: usize) -> String {
         match self {
-            Self::Es => format!("Escaneo VST3 completado: {count} plugin(s) encontrado(s)."),
-            Self::En => format!("VST3 scan complete: found {count} plugin(s)."),
+            Self::Es => format!("Escaneo VST completado: {count} plugin(s) encontrado(s)."),
+            Self::En => format!("VST scan complete: found {count} plugin(s)."),
         }
     }
 
     pub fn loaded_vst3_status(self, name: &str, param_count: usize) -> String {
         match self {
-            Self::Es => format!("VST3 cargado: {name} ({param_count} parámetros)"),
-            Self::En => format!("Loaded VST3: {name} ({param_count} parameters)"),
+            Self::Es => format!("VST cargado: {name} ({param_count} parámetros)"),
+            Self::En => format!("Loaded VST: {name} ({param_count} parameters)"),
+        }
+    }
+
+    pub fn opened_folder_status(self, path: &std::path::Path) -> String {
+        match self {
+            Self::Es => format!("Carpeta de VST abierta: {}", path.display()),
+            Self::En => format!("Opened VST folder: {}", path.display()),
+        }
+    }
+
+    pub fn vst_folder_updated_status(self, path: &std::path::Path) -> String {
+        match self {
+            Self::Es => format!("Carpeta de VST actualizada: {}", path.display()),
+            Self::En => format!("Updated VST folder: {}", path.display()),
         }
     }
 
@@ -157,6 +171,7 @@ impl Lang {
 pub struct Strings {
     pub nav_news: &'static str,
     pub nav_recording: &'static str,
+    pub nav_settings: &'static str,
     pub nav_live_badge: &'static str,
     pub nav_rec_badge: &'static str,
     pub lang_label: &'static str,
@@ -164,8 +179,39 @@ pub struct Strings {
     pub news_hero_subtitle: &'static str,
     pub news_hero_description: &'static str,
     pub news_go_recording: &'static str,
+    pub news_quickstart_title: &'static str,
+    pub news_step1_title: &'static str,
+    pub news_step1_desc: &'static str,
+    pub news_step2_title: &'static str,
+    pub news_step2_desc: &'static str,
+    pub news_step3_title: &'static str,
+    pub news_step3_desc: &'static str,
     pub news_section_title: &'static str,
     pub news_items: &'static [NewsItem],
+
+    pub chain_input: &'static str,
+    pub chain_effect: &'static str,
+    pub chain_output: &'static str,
+    pub chain_record: &'static str,
+    pub chain_clean: &'static str,
+    pub chain_ready: &'static str,
+
+    pub settings_title: &'static str,
+    pub settings_subtitle: &'static str,
+    pub settings_vst_folder_heading: &'static str,
+    pub settings_vst_folder_desc: &'static str,
+    pub settings_active_folder_label: &'static str,
+    pub settings_mode_program: &'static str,
+    pub settings_mode_custom: &'static str,
+    pub settings_open_vst_folder: &'static str,
+    pub settings_choose_custom_folder: &'static str,
+    pub settings_use_program_folder: &'static str,
+    pub settings_scan_now: &'static str,
+    pub settings_include_system_vst: &'static str,
+    pub settings_detected_heading: &'static str,
+    pub settings_search_hint: &'static str,
+    pub settings_no_plugins_in_folder: &'static str,
+    pub settings_load_in_recording: &'static str,
 
     pub start_monitoring: &'static str,
     pub stop_monitoring: &'static str,
@@ -186,6 +232,7 @@ pub struct Strings {
     pub vst3_slot_heading: &'static str,
     pub scanning: &'static str,
     pub scan_installed_vst3: &'static str,
+    pub open_vst_folder_btn: &'static str,
     pub open_bundle: &'static str,
     pub open_file: &'static str,
     pub discovered: &'static str,
@@ -219,6 +266,7 @@ pub struct Strings {
     pub dialog_vst3_filter: &'static str,
     pub dialog_select_bundle: &'static str,
     pub dialog_select_plugin: &'static str,
+    pub dialog_select_vst_folder: &'static str,
 }
 
 pub struct NewsItem {
@@ -230,13 +278,13 @@ pub struct NewsItem {
 static ES_NEWS: &[NewsItem] = &[
     NewsItem {
         tag: "Nuevo",
-        title: "Panel de inicio, barra superior e idioma ES / EN",
-        summary: "Chronomix inicia ahora con esta vista de Novedades, una barra superior fija para navegar al panel de Grabación y selector de idioma en vivo entre Español e Inglés.",
+        title: "Soporte VST2 + VST3 y Panel de Ajustes con Carpeta de VST",
+        summary: "Ahora puedes cargar plugins VST2 (.dll / .so) y VST3 (.vst3). En el nuevo panel Ajustes puedes abrir la carpeta de VST del programa para pegar tus plugins o elegir una carpeta personalizada.",
     },
     NewsItem {
         tag: "Audio + Wine",
-        title: "Puente integrado para VST3 de Windows (x64) en Linux",
-        summary: "Carga plugins .vst3 nativos de Linux y plugins VST3 de Windows de 64 bits mediante Wine con procesamiento en tiempo real y apertura de ventana nativa HWND.",
+        title: "Puente integrado para VST2 y VST3 de Windows (x64) en Linux",
+        summary: "Carga plugins VST2 y VST3 nativos de Linux o de Windows de 64 bits mediante Wine con procesamiento en tiempo real y ventana nativa HWND.",
     },
     NewsItem {
         tag: "Grabación",
@@ -248,13 +296,13 @@ static ES_NEWS: &[NewsItem] = &[
 static EN_NEWS: &[NewsItem] = &[
     NewsItem {
         tag: "New",
-        title: "Start screen, top toolbar & ES / EN localization",
-        summary: "Chronomix now opens with this What's New view, a persistent top toolbar to jump into the Recording workspace, and live Spanish / English switching.",
+        title: "VST2 + VST3 support & Settings Panel with VST Folder",
+        summary: "Chronomix now supports both VST2 (.dll / .so) and VST3 (.vst3) plugins. Use the new Settings panel to open the program's VST folder and paste your plugins or configure a custom VST folder.",
     },
     NewsItem {
         tag: "Audio + Wine",
-        title: "Integrated Windows (x64) VST3 bridge on Linux",
-        summary: "Load native Linux .vst3 plugins and 64-bit Windows VST3 plugins via Wine with real-time DSP processing and native HWND plugin editor windows.",
+        title: "Integrated Windows (x64) VST2 & VST3 bridge on Linux",
+        summary: "Load native Linux VST2/VST3 plugins and 64-bit Windows VST2 (.dll) & VST3 (.vst3) plugins via Wine with real-time DSP and native HWND editor windows.",
     },
     NewsItem {
         tag: "Recording",
@@ -266,15 +314,47 @@ static EN_NEWS: &[NewsItem] = &[
 static ES_STRINGS: Strings = Strings {
     nav_news: "Novedades",
     nav_recording: "Grabación",
+    nav_settings: "Ajustes",
     nav_live_badge: "En vivo",
     nav_rec_badge: "Grabando",
     lang_label: "Idioma:",
 
-    news_hero_subtitle: "DAW de audio en tiempo real y host VST3",
-    news_hero_description: "Conecta tu interfaz o micrófono USB, procesa efectos VST3 con baja latencia y graba directamente a WAV. Usa el botón Grabación de la barra superior para abrir el estudio.",
+    news_hero_subtitle: "DAW de audio en tiempo real y host VST2 / VST3",
+    news_hero_description: "Conecta tu interfaz o micrófono USB, procesa efectos VST2 y VST3 con baja latencia y graba directamente a WAV. Gestiona tu carpeta de plugins en Ajustes o abre Grabación en la barra superior.",
     news_go_recording: "Ir a Grabación",
+    news_quickstart_title: " Flujo de trabajo en 3 pasos",
+    news_step1_title: "1. Añade tus plugins VST",
+    news_step1_desc: "Ve a Ajustes y pulsa «Abrir Carpeta de VST» para pegar tus archivos .vst3 o .dll.",
+    news_step2_title: "2. Activa el monitoreo",
+    news_step2_desc: "En Grabación elige tu micrófono/instrumento y tus audífonos, y pulsa «Iniciar Monitoreo».",
+    news_step3_title: "3. Carga un efecto y graba",
+    news_step3_desc: "Selecciona un plugin de tu biblioteca, abre su GUI nativa, ajusta la mezcla y graba a WAV.",
     news_section_title: "Novedades",
     news_items: ES_NEWS,
+
+    chain_input: "1. ENTRADA",
+    chain_effect: "2. EFECTO VST",
+    chain_output: "3. SALIDA",
+    chain_record: "4. GRABACIÓN",
+    chain_clean: "Señal limpia (Sin VST)",
+    chain_ready: "Listo para grabar WAV",
+
+    settings_title: "Ajustes de Chronomix",
+    settings_subtitle: "Gestiona dónde se guardan y escanean tus plugins VST2 (.dll / .so) y VST3 (.vst3).",
+    settings_vst_folder_heading: "Carpeta de Plugins VST (VST2 y VST3)",
+    settings_vst_folder_desc: "Pulsa «Abrir Carpeta de VST» para abrir el explorador de archivos y mover o pegar ahí tus plugins (.vst3, .dll, .so), o selecciona cualquier carpeta personalizada de tu equipo.",
+    settings_active_folder_label: "Carpeta activa:",
+    settings_mode_program: "Carpeta del Programa",
+    settings_mode_custom: "Carpeta Personalizada",
+    settings_open_vst_folder: "Abrir Carpeta de VST",
+    settings_choose_custom_folder: "Elegir Carpeta Personalizada...",
+    settings_use_program_folder: "Usar Carpeta del Programa",
+    settings_scan_now: "Escanear Carpeta VST",
+    settings_include_system_vst: "Incluir también carpetas VST del sistema y Wine",
+    settings_detected_heading: "Plugins detectados en tu biblioteca",
+    settings_search_hint: "Buscar plugin por nombre o fabricante...",
+    settings_no_plugins_in_folder: "Aún no se detectaron plugins en esta carpeta. Pulsa «Abrir Carpeta de VST», pega tus archivos .vst3 o .dll y pulsa «Escanear Carpeta VST».",
+    settings_load_in_recording: "Cargar en Grabación",
 
     start_monitoring: "Iniciar Monitoreo",
     stop_monitoring: "Detener Monitoreo",
@@ -292,16 +372,17 @@ static ES_STRINGS: Strings = Strings {
     meter_in: "Ent.",
     meter_out: "Sal.",
 
-    vst3_slot_heading: "Ranura de Efecto VST3",
+    vst3_slot_heading: "Ranura de Efecto VST (VST2 / VST3)",
     scanning: "Escaneando...",
-    scan_installed_vst3: "Escanear VST3 Instalados",
-    open_bundle: "Abrir Carpeta .vst3...",
-    open_file: "Abrir Archivo .vst3...",
+    scan_installed_vst3: "Escanear VSTs",
+    open_vst_folder_btn: "Abrir Carpeta VST",
+    open_bundle: "Abrir Carpeta VST...",
+    open_file: "Abrir Archivo (.vst3 / .dll / .so)...",
     discovered: "Encontrados:",
     select_plugin: "Seleccionar plugin",
     load_selected: "Cargar Seleccionado",
     path_label: "Ruta:",
-    path_hint: "/usr/lib/vst3/MiEfecto.vst3 o /home/.../Plugin.vst3",
+    path_hint: "vst_plugins/MiEfecto.vst3 o MiPlugin.dll",
     browse: "Examinar...",
     folder: "Carpeta...",
     load_path: "Cargar Ruta",
@@ -313,11 +394,11 @@ static ES_STRINGS: Strings = Strings {
     unload: "Descargar",
     parameters: "Parámetros:",
     filter_params_hint: "Filtrar parámetros...",
-    no_plugin_loaded: "No hay ningún plugin VST3 cargado. Puedes iniciar el monitoreo para escuchar la señal limpia o cargar un efecto .vst3 arriba.",
+    no_plugin_loaded: "No hay ningún plugin VST cargado. Puedes iniciar el monitoreo para escuchar la señal limpia o cargar un efecto VST2 (.dll/.so) o VST3 (.vst3) arriba.",
 
     status_ready: "Listo. Selecciona dispositivos de entrada/salida y pulsa Iniciar Monitoreo.",
     status_stopped: "Monitoreo detenido.",
-    status_scanning: "Escaneando directorios estándar de VST3...",
+    status_scanning: "Escaneando carpeta de plugins VST2/VST3...",
     status_unloaded: "Plugin descargado (monitoreo limpio activo).",
     error_prefix: "Error:",
     error_select_io: "Selecciona un dispositivo de entrada y otro de salida.",
@@ -325,23 +406,56 @@ static ES_STRINGS: Strings = Strings {
     dismiss: "Cerrar",
 
     dialog_wav_filter: "Audio WAV",
-    dialog_vst3_filter: "Plugin VST3",
-    dialog_select_bundle: "Seleccionar paquete o carpeta VST3",
-    dialog_select_plugin: "Seleccionar plugin VST3",
+    dialog_vst3_filter: "Plugin VST2 / VST3 (.vst3, .dll, .so)",
+    dialog_select_bundle: "Seleccionar paquete o carpeta VST",
+    dialog_select_plugin: "Seleccionar plugin VST2 / VST3",
+    dialog_select_vst_folder: "Seleccionar carpeta de plugins VST",
 };
 
 static EN_STRINGS: Strings = Strings {
     nav_news: "What's New",
     nav_recording: "Recording",
+    nav_settings: "Settings",
     nav_live_badge: "Live",
     nav_rec_badge: "Rec",
     lang_label: "Language:",
 
-    news_hero_subtitle: "Real-Time Audio DAW & VST3 Host",
-    news_hero_description: "Connect your audio interface or USB mic, process VST3 effects at low latency, and capture straight to WAV. Click Recording in the top toolbar to open the audio workspace.",
+    news_hero_subtitle: "Real-Time Audio DAW & VST2 / VST3 Host",
+    news_hero_description: "Connect your audio interface or USB mic, process VST2 & VST3 effects at low latency, and capture straight to WAV. Manage your VST folder in Settings or click Recording in the top toolbar.",
     news_go_recording: "Open Recording",
+    news_quickstart_title: " 3-Step Quick Workflow",
+    news_step1_title: "1. Add your VST plugins",
+    news_step1_desc: "Open Settings and click \"Open VST Folder\" to drop in your .vst3 or .dll plugins.",
+    news_step2_title: "2. Start live monitoring",
+    news_step2_desc: "In Recording, pick your input mic/instrument and output headphones, then click \"Start Monitoring\".",
+    news_step3_title: "3. Load an effect & record",
+    news_step3_desc: "Pick any plugin from your library, open its native GUI, dial Dry/Wet mix, and record to WAV.",
     news_section_title: "What's New",
     news_items: EN_NEWS,
+
+    chain_input: "1. INPUT",
+    chain_effect: "2. VST EFFECT",
+    chain_output: "3. OUTPUT",
+    chain_record: "4. RECORDING",
+    chain_clean: "Clean signal (No VST)",
+    chain_ready: "Ready to record WAV",
+
+    settings_title: "Chronomix Settings",
+    settings_subtitle: "Manage where your VST2 (.dll / .so) and VST3 (.vst3) plugins are stored and scanned.",
+    settings_vst_folder_heading: "VST Plugins Folder (VST2 & VST3)",
+    settings_vst_folder_desc: "Click \"Open VST Folder\" to open your system file manager and move or paste your plugins (.vst3, .dll, .so) right in, or choose any custom folder on your computer.",
+    settings_active_folder_label: "Active folder:",
+    settings_mode_program: "Program Folder",
+    settings_mode_custom: "Custom Folder",
+    settings_open_vst_folder: "Open VST Folder",
+    settings_choose_custom_folder: "Choose Custom Folder...",
+    settings_use_program_folder: "Use Program Folder",
+    settings_scan_now: "Scan VST Folder",
+    settings_include_system_vst: "Also include system & Wine VST folders",
+    settings_detected_heading: "Detected plugins in your library",
+    settings_search_hint: "Search plugin by name or vendor...",
+    settings_no_plugins_in_folder: "No plugins found in this folder yet. Click \"Open VST Folder\", paste your .vst3 or .dll files, and click \"Scan VST Folder\".",
+    settings_load_in_recording: "Load in Recording",
 
     start_monitoring: "Start Monitoring",
     stop_monitoring: "Stop Monitoring",
@@ -359,16 +473,17 @@ static EN_STRINGS: Strings = Strings {
     meter_in: "In",
     meter_out: "Out",
 
-    vst3_slot_heading: "VST3 Effect Slot",
+    vst3_slot_heading: "VST Effect Slot (VST2 / VST3)",
     scanning: "Scanning...",
-    scan_installed_vst3: "Scan Installed VST3s",
-    open_bundle: "Open .vst3 Bundle...",
-    open_file: "Open .vst3 File...",
+    scan_installed_vst3: "Scan VSTs",
+    open_vst_folder_btn: "Open VST Folder",
+    open_bundle: "Open VST Folder...",
+    open_file: "Open File (.vst3 / .dll / .so)...",
     discovered: "Discovered:",
     select_plugin: "Select plugin",
     load_selected: "Load Selected",
     path_label: "Path:",
-    path_hint: "/usr/lib/vst3/MyEffect.vst3 or /home/.../Plugin.vst3",
+    path_hint: "vst_plugins/MyEffect.vst3 or MyPlugin.dll",
     browse: "Browse...",
     folder: "Folder...",
     load_path: "Load Path",
@@ -380,11 +495,11 @@ static EN_STRINGS: Strings = Strings {
     unload: "Unload",
     parameters: "Parameters:",
     filter_params_hint: "Filter parameters...",
-    no_plugin_loaded: "No VST3 plugin loaded. You can still start monitoring to hear clean input, or load a .vst3 effect above.",
+    no_plugin_loaded: "No VST plugin loaded. You can still start monitoring to hear clean input, or load a VST2 (.dll/.so) or VST3 (.vst3) effect above.",
 
     status_ready: "Ready. Select input/output devices and press Start Monitoring.",
     status_stopped: "Monitoring stopped.",
-    status_scanning: "Scanning standard VST3 directories...",
+    status_scanning: "Scanning VST2/VST3 plugin directories...",
     status_unloaded: "Plugin unloaded (clean monitoring active).",
     error_prefix: "Error:",
     error_select_io: "Please select both an input and an output device.",
@@ -392,9 +507,10 @@ static EN_STRINGS: Strings = Strings {
     dismiss: "Dismiss",
 
     dialog_wav_filter: "WAV Audio",
-    dialog_vst3_filter: "VST3 Plugin",
-    dialog_select_bundle: "Select VST3 bundle or folder",
-    dialog_select_plugin: "Select VST3 plugin",
+    dialog_vst3_filter: "VST2 / VST3 Plugin (.vst3, .dll, .so)",
+    dialog_select_bundle: "Select VST bundle or folder",
+    dialog_select_plugin: "Select VST2 / VST3 plugin",
+    dialog_select_vst_folder: "Select VST plugins folder",
 };
 
 #[cfg(test)]

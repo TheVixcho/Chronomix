@@ -6,9 +6,13 @@ license.workspace = true
 
 [dependencies]
 hound.workspace = true
+libloading.workspace = true
 log.workspace = true
 pedal-audio = { path = "../pedal-audio" }
 pedal-wine = { path = "../pedal-wine" }
 rtrb.workspace = true
 thiserror.workspace = true
 vst3-host.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"

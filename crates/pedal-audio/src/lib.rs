@@ -142,9 +142,11 @@ fn device_display_name(dev: &Device, id: &str, is_input: bool) -> String {
 fn clean_device_label(raw: &str, id: &str, is_input: bool) -> String {
     let first_line = raw.lines().next().unwrap_or(raw).trim();
     match first_line {
-        "default_input" => return "System Default (Input)".to_string(),
-        "default_output" => return "System Default (Output)".to_string(),
-        "default" => {
+        "default_input" | "input_default" => return "System Default (Input)".to_string(),
+        "default_output" | "sink_default" | "default_sink" => {
+            return "System Default (Output)".to_string()
+        }
+        "default" | "Default ALSA Output (currently PipeWire Media Server)" => {
             return if is_input {
                 "System Default (Input)".to_string()
             } else {
@@ -171,8 +173,8 @@ fn should_keep_device(host_id: HostId, raw_id: &str, raw_name: &str, is_input: b
     match host_id {
         #[cfg(target_os = "linux")]
         HostId::PipeWire => {
-            // Skip virtual loopback sink monitor and internal stream nodes.
-            if dev_id == "sink_default" || raw_name == "default_sink" {
+            // Skip virtual loopback sink monitor on inputs only; on outputs sink_default is the main desktop output.
+            if is_input && (dev_id == "sink_default" || raw_name == "default_sink") {
                 return false;
             }
             if is_input && raw_name.starts_with("Monitor of ") {
@@ -218,10 +220,12 @@ fn should_keep_alsa_pcm(pcm_id: &str) -> bool {
             | "surround71"
             | "iec958"
             | "spdif"
+            | "hdmi"
             | "dmix"
             | "dsnoop"
             | "plug"
             | "lavrate"
+            | "samplerate"
             | "speex"
             | "speexrate"
             | "upmix"
@@ -340,8 +344,27 @@ fn resolve_buffer_size(
     channels: u16,
     block_size: usize,
 ) -> BufferSize {
+    let host_id = device
+        .id()
+        .map(|d| d.host())
+        .unwrap_or_else(|_| cpal::default_host().id());
+
+    // In CPAL's ALSA backend, BufferSize::Fixed sets the total multi-period ring buffer size
+    // rather than a single callback period; use 3x block_size so each period matches block_size
+    // without constant XRUNs on pipewire-alsa / plughw.
+    #[cfg(target_os = "linux")]
+    let target_frames = if host_id == HostId::Alsa {
+        (block_size as u32).saturating_mul(3).max(512)
+    } else {
+        block_size as u32
+    };
+    #[cfg(not(target_os = "linux"))]
+    let target_frames = {
+        let _ = host_id;
+        block_size as u32
+    };
+
     let ranges = supported_configs(device, is_input);
-    let block_u32 = block_size as u32;
     let mut fallback = None;
     for range in ranges {
         if sample_rate < range.min_sample_rate() || sample_rate > range.max_sample_rate() {
@@ -349,7 +372,7 @@ fn resolve_buffer_size(
         }
         let resolved = match *range.buffer_size() {
             SupportedBufferSize::Range { min, max } => {
-                BufferSize::Fixed(block_u32.clamp(min, max))
+                BufferSize::Fixed(target_frames.clamp(min, max))
             }
             SupportedBufferSize::Unknown => BufferSize::Default,
         };
@@ -442,6 +465,7 @@ pub fn start_audio_session<P: StereoAudioProcessor>(
         in_r: vec![0.0; max_scratch_frames],
         out_l: vec![0.0; max_scratch_frames],
         out_r: vec![0.0; max_scratch_frames],
+        primed: false,
         stats: Arc::clone(&stats),
     };
 
@@ -567,6 +591,7 @@ struct OutputBridge<P: StereoAudioProcessor> {
     in_r: Vec<f32>,
     out_l: Vec<f32>,
     out_r: Vec<f32>,
+    primed: bool,
     stats: Arc<AudioStats>,
 }
 
@@ -585,20 +610,42 @@ impl<P: StereoAudioProcessor> OutputBridge<P> {
 
         while frame_offset < total_frames {
             let chunk_frames = (total_frames - frame_offset).min(max_chunk);
-            let available_frames = self.consumer.slots() / 2;
-            let readable = available_frames.min(chunk_frames);
+            let mut available_frames = self.consumer.slots() / 2;
 
-            if readable < chunk_frames {
-                self.stats.output_underruns.fetch_add(1, Ordering::Relaxed);
+            // Cap excessive buffer accumulation (clock drift or startup burst) to keep monitoring latency low.
+            let max_buffered = (chunk_frames * 5).max(1536);
+            let target_keep = chunk_frames + (chunk_frames / 2).min(512);
+            if available_frames > max_buffered {
+                let drop_frames = available_frames.saturating_sub(target_keep);
+                for _ in 0..(drop_frames * 2) {
+                    let _ = self.consumer.pop();
+                }
+                available_frames = self.consumer.slots() / 2;
             }
 
-            for i in 0..readable {
-                self.in_l[i] = self.consumer.pop().unwrap_or(0.0);
-                self.in_r[i] = self.consumer.pop().unwrap_or(0.0);
+            let prime_threshold = if chunk_frames >= 32 {
+                target_keep
+            } else {
+                chunk_frames
+            };
+
+            if !self.primed && available_frames >= prime_threshold {
+                self.primed = true;
             }
-            if readable < chunk_frames {
-                self.in_l[readable..chunk_frames].fill(0.0);
-                self.in_r[readable..chunk_frames].fill(0.0);
+
+            if self.primed && available_frames >= chunk_frames {
+                for i in 0..chunk_frames {
+                    self.in_l[i] = self.consumer.pop().unwrap_or(0.0);
+                    self.in_r[i] = self.consumer.pop().unwrap_or(0.0);
+                }
+            } else {
+                if self.primed {
+                    // Actual underrun: re-prime on the next callback without draining partial frames!
+                    self.primed = false;
+                    self.stats.output_underruns.fetch_add(1, Ordering::Relaxed);
+                }
+                self.in_l[..chunk_frames].fill(0.0);
+                self.in_r[..chunk_frames].fill(0.0);
             }
 
             self.out_l[..chunk_frames].fill(0.0);
@@ -800,6 +847,7 @@ mod tests {
             in_r: vec![0.0; 64],
             out_l: vec![0.0; 64],
             out_r: vec![0.0; 64],
+            primed: false,
             stats,
         };
 
@@ -864,6 +912,12 @@ mod tests {
         ));
         assert!(should_keep_device(
             HostId::PipeWire,
+            "pipewire:sink_default",
+            "default_sink",
+            false
+        ));
+        assert!(should_keep_device(
+            HostId::PipeWire,
             "pipewire:alsa_input.usb-Samson",
             "Samson C01U Pro Mic",
             true
@@ -871,6 +925,10 @@ mod tests {
         assert_eq!(
             clean_device_label("default_input", "pipewire:input_default", true),
             "System Default (Input)"
+        );
+        assert_eq!(
+            clean_device_label("sink_default", "pipewire:sink_default", false),
+            "System Default (Output)"
         );
     }
 }

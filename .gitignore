@@ -1,3 +1,6 @@
 /target/
 *.wav
 .DS_Store
+/vst_plugins/*
+!/vst_plugins/.gitkeep
+chronomix-settings.json
