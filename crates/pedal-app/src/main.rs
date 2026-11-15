@@ -1,4 +1,6 @@
 mod i18n;
+mod library_ui;
+mod midi_ui;
 mod mixer_ui;
 mod theme;
 
@@ -57,6 +59,8 @@ enum ActivePanel {
     News,
     Recording,
     Mixer,
+    Midi,
+    Library,
     Settings,
 }
 
@@ -241,6 +245,9 @@ struct ChronomixApp {
     loaded_plugin: Option<LoadedPluginMeta>,
     param_filter: String,
 
+    midi_state: midi_ui::MidiStudioState,
+    library_state: library_ui::LibraryUiState,
+
     status: StatusState,
     error: Option<ErrorState>,
 }
@@ -322,6 +329,9 @@ impl ChronomixApp {
         let mut mixer_engine = MixerEngine::new();
         mixer_engine.set_wine_config(wine_config.clone());
         let mixer_ui = MixerUiState::new(selected_output.clone(), mixer_engine.channels().len());
+        let initial_rec_dir = mixer_ui.recording_base_dir.clone();
+        let library_state = library_ui::LibraryUiState::new(initial_rec_dir);
+        let midi_state = midi_ui::MidiStudioState::new();
 
         let mut app = Self {
             theme_initialized: false,
@@ -363,6 +373,8 @@ impl ChronomixApp {
             show_path_loader: false,
             loaded_plugin: None,
             param_filter: String::new(),
+            midi_state,
+            library_state,
             status: StatusState::Ready,
             error: None,
         };
@@ -801,6 +813,91 @@ impl ChronomixApp {
                 .size(10.0)
                 .color(Color32::from_rgb(110, 118, 134)),
         );
+    }
+
+    fn render_davinci_resolve_toolbar(&mut self, ui: &mut egui::Ui) {
+        let t = self.lang.text();
+        let tabs = [
+            (
+                ActivePanel::Mixer,
+                StudioIcon::Sliders,
+                t.nav_resolve_mixer,
+                Color32::from_rgb(90, 180, 255),
+            ),
+            (
+                ActivePanel::Midi,
+                StudioIcon::Piano,
+                t.nav_resolve_midi,
+                Color32::from_rgb(240, 160, 120),
+            ),
+            (
+                ActivePanel::Library,
+                StudioIcon::Folder,
+                t.nav_resolve_library,
+                Color32::from_rgb(100, 220, 150),
+            ),
+        ];
+
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+                    for (panel, icon, label, accent) in tabs {
+                        let is_active = self.active_panel == panel;
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(145.0, 32.0), Sense::click());
+                        if resp.clicked() {
+                            self.active_panel = panel;
+                        }
+
+                        let hover = resp.hovered();
+                        let bg_color = if is_active {
+                            Color32::from_rgb(32, 35, 44)
+                        } else if hover {
+                            Color32::from_rgb(26, 28, 34)
+                        } else {
+                            Color32::from_rgb(18, 19, 24)
+                        };
+
+                        let border_color = if is_active {
+                            accent
+                        } else if hover {
+                            Color32::from_rgb(55, 58, 68)
+                        } else {
+                            Color32::from_rgb(36, 38, 46)
+                        };
+
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), bg_color);
+                        ui.painter().rect_stroke(
+                            rect,
+                            CornerRadius::same(4),
+                            Stroke::new(1.0_f32, border_color),
+                            StrokeKind::Inside,
+                        );
+
+                        if is_active {
+                            let strip = Rect::from_min_size(
+                                Pos2::new(rect.min.x + 8.0, rect.max.y - 2.5),
+                                Vec2::new(rect.width() - 16.0, 2.5),
+                            );
+                            ui.painter().rect_filled(strip, CornerRadius::same(1), accent);
+                        }
+
+                        let icon_center = Pos2::new(rect.min.x + 22.0, rect.center().y);
+                        let icon_color = if is_active { accent } else { Color32::from_rgb(160, 165, 175) };
+                        draw_vector_icon(ui.painter(), icon_center, 15.0, icon, icon_color);
+
+                        let text_color = if is_active { Color32::WHITE } else { Color32::from_rgb(170, 175, 185) };
+                        ui.painter().text(
+                            Pos2::new(rect.min.x + 40.0, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            label,
+                            FontId::proportional(11.5),
+                            text_color,
+                        );
+                    }
+                });
+            });
+        });
     }
 
     /// Static, squared top navigation bar with vector logo, tabs, live status badge, and language selector.
@@ -3274,6 +3371,17 @@ impl eframe::App for ChronomixApp {
             }
         }
 
+        egui::Panel::bottom("davinci_resolve_toolbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(16, 17, 21))
+                    .inner_margin(Margin::symmetric(14, 5))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_rgb(38, 40, 48))),
+            )
+            .show_inside(ui, |ui| {
+                self.render_davinci_resolve_toolbar(ui);
+            });
+
         let t = self.lang.text();
         let lang = self.lang;
         egui::Panel::bottom("status_bar")
@@ -3420,6 +3528,44 @@ impl eframe::App for ChronomixApp {
                         self.refresh_devices();
                     }
                 }
+                ActivePanel::Midi => {
+                    let mut switch_to_mixer = false;
+                    let fallback_str = (!self.mixer_ui.selected_output.is_empty())
+                        .then(|| self.mixer_ui.selected_output.clone());
+                    midi_ui::render_midi_studio(
+                        ui,
+                        midi_ui::MidiStudioContext {
+                            lang: self.lang,
+                            state: &mut self.midi_state,
+                            mixer: &mut self.mixer_engine,
+                            mixer_ui: &mut self.mixer_ui,
+                            fallback_output: fallback_str.as_deref(),
+                            switch_to_mixer: &mut switch_to_mixer,
+                        },
+                    );
+                    if switch_to_mixer {
+                        self.active_panel = ActivePanel::Mixer;
+                    }
+                }
+                ActivePanel::Library => {
+                    let mut switch_to_mixer = false;
+                    let fallback_str = (!self.mixer_ui.selected_output.is_empty())
+                        .then(|| self.mixer_ui.selected_output.clone());
+                    library_ui::render_library_panel(
+                        ui,
+                        library_ui::LibraryPanelContext {
+                            lang: self.lang,
+                            state: &mut self.library_state,
+                            mixer: &mut self.mixer_engine,
+                            mixer_ui: &mut self.mixer_ui,
+                            fallback_output: fallback_str.as_deref(),
+                            switch_to_mixer: &mut switch_to_mixer,
+                        },
+                    );
+                    if switch_to_mixer {
+                        self.active_panel = ActivePanel::Mixer;
+                    }
+                }
                 ActivePanel::Settings => self.render_settings_panel(ui),
             });
     }
@@ -3441,7 +3587,7 @@ fn draw_status_pill(ui: &mut egui::Ui, text: &str, color: Color32) {
         });
 }
 
-fn open_folder_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+pub(crate) fn open_folder_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let mut cmd = {
         let mut c = std::process::Command::new("xdg-open");

@@ -48,6 +48,7 @@ pub enum StudioIcon {
     Search,
     Close,
     Bolt,
+    Piano,
 }
 
 /// Draws a crisp vector icon centered at `center` within a square of `size`.
@@ -249,6 +250,22 @@ pub fn draw_vector_icon(
                 Pos2::new(center.x + r * 0.05, center.y - r * 0.08),
             ];
             painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
+        }
+        StudioIcon::Piano => {
+            let box_rect = Rect::from_center_size(center, Vec2::new(size * 1.0, size * 0.75));
+            painter.rect_stroke(box_rect, CornerRadius::same(2), stroke, StrokeKind::Inside);
+            let kw = box_rect.width() / 4.0;
+            for i in 1..4 {
+                let x = box_rect.min.x + i as f32 * kw;
+                painter.line_segment([Pos2::new(x, box_rect.min.y), Pos2::new(x, box_rect.max.y)], stroke);
+            }
+            let bw = kw * 0.55;
+            let bh = box_rect.height() * 0.55;
+            for i in [1, 2] {
+                let bx = box_rect.min.x + i as f32 * kw - bw * 0.5;
+                let b_rect = Rect::from_min_size(Pos2::new(bx, box_rect.min.y), Vec2::new(bw, bh));
+                painter.rect_filled(b_rect, CornerRadius::same(1), color);
+            }
         }
     }
 }

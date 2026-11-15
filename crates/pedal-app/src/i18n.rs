@@ -183,6 +183,9 @@ impl Lang {
 
 /// Static localized UI copy for all panels and controls.
 pub struct Strings {
+    pub nav_resolve_mixer: &'static str,
+    pub nav_resolve_midi: &'static str,
+    pub nav_resolve_library: &'static str,
     pub nav_news: &'static str,
     pub nav_recording: &'static str,
     pub nav_mixer: &'static str,
@@ -446,6 +449,9 @@ static EN_NEWS: &[NewsItem] = &[
 ];
 
 static ES_STRINGS: Strings = Strings {
+    nav_resolve_mixer: "MIXER",
+    nav_resolve_midi: "MIDI STUDIO",
+    nav_resolve_library: "BIBLIOTECA",
     nav_news: "Novedades",
     nav_recording: "Grabación",
     nav_mixer: "Mixer",
@@ -667,6 +673,9 @@ static ES_STRINGS: Strings = Strings {
 };
 
 static EN_STRINGS: Strings = Strings {
+    nav_resolve_mixer: "MIXER",
+    nav_resolve_midi: "MIDI STUDIO",
+    nav_resolve_library: "LIBRARY",
     nav_news: "What's New",
     nav_recording: "Recording",
     nav_mixer: "Mixer",

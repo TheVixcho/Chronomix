@@ -1818,6 +1818,26 @@ impl MixerEngine {
         Ok(title)
     }
 
+    pub fn install_custom_media_buffer(
+        &mut self,
+        ch: usize,
+        title: String,
+        buf: MediaBuffer,
+        auto_play: bool,
+        fallback_output_device: Option<&str>,
+    ) -> Result<String, EngineError> {
+        let fake_path = PathBuf::from(format!("custom-session:{title}"));
+        self.install_channel_media_buffer(ch, fake_path, buf, auto_play, fallback_output_device)
+    }
+
+    pub fn add_midi_channel(&mut self, name: &str) -> Option<usize> {
+        let idx = self.add_multimedia_channel()?;
+        if let Some(ch) = self.channels.get_mut(idx) {
+            ch.name = name.to_string();
+        }
+        Some(idx)
+    }
+
     pub fn poll_media_loads(
         &mut self,
         fallback_output_device: Option<&str>,
