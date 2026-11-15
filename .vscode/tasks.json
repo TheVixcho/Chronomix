@@ -2,6 +2,52 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "chronomix: check dependencies",
+            "type": "shell",
+            "linux": {
+                "command": "bash",
+                "args": [
+                    "${workspaceFolder}/.vscode/check-deps.sh"
+                ]
+            },
+            "osx": {
+                "command": "sh",
+                "args": [
+                    "-c",
+                    "command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1 || { echo 'Cargo.toml:1: error: Falta Rust/Cargo (instala con https://rustup.rs)'; exit 1; }"
+                ]
+            },
+            "windows": {
+                "command": "powershell",
+                "args": [
+                    "-NoProfile",
+                    "-Command",
+                    "if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Output 'Cargo.toml:1: error: Falta Rust/Cargo (instala con https://rustup.rs)'; exit 1 }"
+                ]
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": false,
+                "showReuseMessage": false
+            },
+            "problemMatcher": {
+                "owner": "chronomix-deps",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^([^:]+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "severity": 3,
+                    "message": 4
+                }
+            }
+        },
+        {
             "label": "cargo: build chronomix (debug)",
             "type": "shell",
             "command": "cargo",
@@ -9,6 +55,9 @@
                 "build",
                 "--bin",
                 "chronomix"
+            ],
+            "dependsOn": [
+                "chronomix: check dependencies"
             ],
             "group": {
                 "kind": "build",
@@ -28,6 +77,9 @@
                 "--bin",
                 "chronomix"
             ],
+            "dependsOn": [
+                "chronomix: check dependencies"
+            ],
             "group": "build",
             "problemMatcher": [
                 "$rustc"
@@ -40,6 +92,9 @@
             "args": [
                 "test",
                 "--workspace"
+            ],
+            "dependsOn": [
+                "chronomix: check dependencies"
             ],
             "group": "test",
             "problemMatcher": [

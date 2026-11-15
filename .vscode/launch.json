@@ -2,6 +2,40 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Run Chronomix (cargo run)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cargo run",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "chronomix: check dependencies",
+            "env": {
+                "RUST_LOG": "info"
+            },
+            "linux": {
+                "env": {
+                    "PATH": "${env:HOME}/.cargo/bin:${env:PATH}",
+                    "RUST_LOG": "info"
+                }
+            }
+        },
+        {
+            "name": "Run Chronomix (cargo run --release)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "cargo run --release",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "chronomix: check dependencies",
+            "env": {
+                "RUST_LOG": "info"
+            },
+            "linux": {
+                "env": {
+                    "PATH": "${env:HOME}/.cargo/bin:${env:PATH}",
+                    "RUST_LOG": "info"
+                }
+            }
+        },
+        {
             "name": "Debug Chronomix (CodeLLDB)",
             "type": "lldb",
             "request": "launch",
