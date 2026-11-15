@@ -17,12 +17,12 @@ use eframe::egui::{
     StrokeKind, Vec2,
 };
 use i18n::Lang;
-use mixer_ui::{MixerPanelContext, MixerUiState, render_mixer_panel};
+use mixer_ui::{MixerPanelContext, MixerUiState, WingScreenTab, WingSelection, render_mixer_panel};
 use pedal_audio::AudioDeviceInfo;
 use pedal_engine::{
-    LoadedPluginMeta, MeterSnapshot, MixerEngine, PedalEngine, WineAction, WineBridgeMode,
-    WineConfig, WineEnvironmentStatus, initialize_wine_prefix, inspect_wine_environment,
-    launch_wine_executable, launch_wine_tool, rebuild_wine_bridge,
+    LoadedPluginMeta, MeterSnapshot, MixerEngine, MixerInsertTarget, PedalEngine, WineAction,
+    WineBridgeMode, WineConfig, WineEnvironmentStatus, initialize_wine_prefix,
+    inspect_wine_environment, launch_wine_executable, launch_wine_tool, rebuild_wine_bridge,
 };
 use theme::{
     StudioIcon, StudioPalette, animated_action_button, animated_led_toggle, apply_studio_theme,
@@ -197,6 +197,7 @@ struct ChronomixApp {
     theme_initialized: bool,
     lang: Lang,
     active_panel: ActivePanel,
+    splash_start: Option<std::time::Instant>,
 
     program_vst_dir: PathBuf,
     custom_vst_dir: Option<PathBuf>,
@@ -325,7 +326,8 @@ impl ChronomixApp {
         let mut app = Self {
             theme_initialized: false,
             lang,
-            active_panel: ActivePanel::News,
+            active_panel: ActivePanel::Mixer,
+            splash_start: Some(std::time::Instant::now()),
             program_vst_dir,
             custom_vst_dir,
             include_system_vst,
@@ -682,7 +684,127 @@ impl ChronomixApp {
             .max(self.peak_hold.out_right * peak_decay);
     }
 
+    fn render_splash_screen(&self, ui: &mut egui::Ui, elapsed: f32, duration: f32) {
+        let t = self.lang.text();
+        let progress = (elapsed / duration).clamp(0.0, 1.0);
+        let screen_rect = ui.max_rect();
+
+        let painter = ui.painter();
+        painter.rect_filled(screen_rect, CornerRadius::ZERO, Color32::from_rgb(12, 13, 16));
+
+        let card_w = 520.0_f32.min(screen_rect.width() - 32.0).max(280.0);
+        let card_h = 320.0_f32.min(screen_rect.height() - 32.0).max(220.0);
+        let card_rect = Rect::from_center_size(screen_rect.center(), Vec2::new(card_w, card_h));
+
+        painter.rect_filled(
+            card_rect,
+            CornerRadius::same(6),
+            Color32::from_rgb(18, 20, 26),
+        );
+        painter.rect_stroke(
+            card_rect,
+            CornerRadius::same(6),
+            Stroke::new(1.2_f32, Color32::from_rgb(46, 52, 68)),
+            StrokeKind::Inside,
+        );
+
+        let mut card_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(card_rect.shrink(24.0))
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+
+        card_ui.add_space(8.0);
+
+        let (logo_rect, _) = card_ui.allocate_exact_size(Vec2::new(48.0, 36.0), Sense::hover());
+        let p = card_ui.painter();
+        let anim_phase = (elapsed * 5.0) as usize;
+        let bar_heights: [f32; 5] = [0.45, 0.85, 0.65, 0.38, 0.72];
+        for (i, _) in bar_heights.iter().enumerate() {
+            let step = (i + anim_phase) % bar_heights.len();
+            let h_ratio = bar_heights[step].min(1.0);
+            let bar_h = 8.0 + h_ratio * 22.0;
+            let x = logo_rect.left() + 4.0 + i as f32 * 8.5;
+            let r = Rect::from_center_size(
+                Pos2::new(x, logo_rect.center().y),
+                Vec2::new(4.5, bar_h),
+            );
+            let col = if progress > 0.85 {
+                StudioPalette::ACCENT_EMERALD
+            } else {
+                StudioPalette::ACCENT_CYAN
+            };
+            p.rect_filled(r, CornerRadius::same(1), col);
+        }
+
+        card_ui.add_space(10.0);
+        card_ui.label(
+            RichText::new("CHRONOMIX")
+                .size(28.0)
+                .strong()
+                .color(Color32::WHITE),
+        );
+        card_ui.label(
+            RichText::new("STUDIO DAW & MULTITRACK CONSOLE")
+                .size(11.0)
+                .strong()
+                .monospace()
+                .color(Color32::from_rgb(160, 172, 190)),
+        );
+
+        card_ui.add_space(8.0);
+        egui::Frame::new()
+            .fill(Color32::from_rgb(26, 30, 40))
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(48, 56, 72)))
+            .corner_radius(CornerRadius::same(3))
+            .inner_margin(Margin::symmetric(10, 3))
+            .show(&mut card_ui, |ui| {
+                ui.label(
+                    RichText::new("64-BIT DSP · VST2 / VST3 · WINE BRIDGE · LOW-LATENCY")
+                        .size(9.5)
+                        .monospace()
+                        .color(StudioPalette::ACCENT_CYAN),
+                );
+            });
+
+        card_ui.add_space(18.0);
+
+        let step_text = if progress < 0.28 {
+            t.splash_init_engine
+        } else if progress < 0.58 {
+            t.splash_load_dsp
+        } else if progress < 0.85 {
+            t.splash_check_vst
+        } else {
+            t.splash_ready
+        };
+
+        card_ui.label(
+            RichText::new(step_text)
+                .size(12.0)
+                .color(Color32::from_rgb(215, 222, 235)),
+        );
+
+        card_ui.add_space(8.0);
+
+        let bar_total_w = (card_w - 64.0).max(100.0);
+        let (bar_rect, _) = card_ui.allocate_exact_size(Vec2::new(bar_total_w, 6.0), Sense::hover());
+        let bp = card_ui.painter();
+        bp.rect_filled(bar_rect, CornerRadius::same(2), Color32::from_rgb(26, 28, 36));
+        let fill_w = (bar_total_w * progress).clamp(4.0, bar_total_w);
+        let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, 6.0));
+        bp.rect_filled(fill_rect, CornerRadius::same(2), Color32::from_rgb(230, 235, 245));
+
+        card_ui.add_space(16.0);
+        card_ui.label(
+            RichText::new(t.splash_skip_hint)
+                .size(10.0)
+                .color(Color32::from_rgb(110, 118, 134)),
+        );
+    }
+
     /// Static, squared top navigation bar with vector logo, tabs, live status badge, and language selector.
+    #[allow(dead_code)]
     fn render_main_toolbar(&mut self, ui: &mut egui::Ui) {
         let t = self.lang.text();
 
@@ -1030,7 +1152,8 @@ impl ChronomixApp {
                             )
                             .clicked()
                             {
-                                self.active_panel = ActivePanel::Recording;
+                                self.mixer_ui.active_tab = WingScreenTab::Home;
+                                self.active_panel = ActivePanel::Mixer;
                             }
 
                             if animated_action_button(
@@ -1058,7 +1181,8 @@ impl ChronomixApp {
                             )
                             .clicked()
                             {
-                                self.active_panel = ActivePanel::Settings;
+                                self.mixer_ui.active_tab = WingScreenTab::Settings;
+                                self.active_panel = ActivePanel::Mixer;
                             }
                         });
                     },
@@ -1148,7 +1272,16 @@ impl ChronomixApp {
                 }
 
                 if let Some(p) = target_panel {
-                    self.active_panel = p;
+                    match p {
+                        ActivePanel::Settings => {
+                            self.mixer_ui.active_tab = WingScreenTab::Settings;
+                            self.active_panel = ActivePanel::Mixer;
+                        }
+                        _ => {
+                            self.mixer_ui.active_tab = WingScreenTab::Home;
+                            self.active_panel = ActivePanel::Mixer;
+                        }
+                    }
                 }
 
                 ui.add_space(12.0);
@@ -1540,8 +1673,18 @@ impl ChronomixApp {
                     }
 
                     if let Some(path) = plugin_to_load {
-                        self.load_plugin_from_path(path);
-                        self.active_panel = ActivePanel::Recording;
+                        let target = match self.mixer_ui.selection {
+                            WingSelection::Channel(ch) => MixerInsertTarget::Channel {
+                                ch,
+                                slot: self.mixer_ui.focused_vst_slot.min(3),
+                            },
+                            WingSelection::Master => MixerInsertTarget::Master {
+                                slot: self.mixer_ui.focused_vst_slot.min(3),
+                            },
+                        };
+                        let _ = self.mixer_engine.load_insert_plugin(target, &path);
+                        self.mixer_ui.active_tab = WingScreenTab::Vst;
+                        self.active_panel = ActivePanel::Mixer;
                     }
                 }
             });
@@ -3113,16 +3256,23 @@ impl eframe::App for ChronomixApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::top("main_toolbar")
-            .frame(
-                egui::Frame::new()
-                    .fill(StudioPalette::BG_PANEL)
-                    .inner_margin(Margin::symmetric(16, 8))
-                    .stroke(Stroke::new(1.0_f32, StudioPalette::BORDER_SUBTLE)),
-            )
-            .show_inside(ui, |ui| {
-                self.render_main_toolbar(ui);
+        if let Some(start) = self.splash_start {
+            let elapsed = start.elapsed().as_secs_f32();
+            let total_duration = 1.6_f32;
+            let skip = ui.input(|i| {
+                i.pointer.any_pressed()
+                    || i.key_pressed(egui::Key::Escape)
+                    || i.key_pressed(egui::Key::Space)
+                    || i.key_pressed(egui::Key::Enter)
             });
+            if elapsed < total_duration && !skip {
+                ui.ctx().request_repaint();
+                self.render_splash_screen(ui, elapsed, total_duration);
+                return;
+            } else {
+                self.splash_start = None;
+            }
+        }
 
         let t = self.lang.text();
         let lang = self.lang;
@@ -3214,15 +3364,7 @@ impl eframe::App for ChronomixApp {
             .show_inside(ui, |ui| match self.active_panel {
                 ActivePanel::News => self.render_news_panel(ui),
                 ActivePanel::Recording => {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.render_signal_chain_banner(ui);
-                        ui.add_space(8.0);
-                        self.render_recording_transport(ui);
-                        ui.add_space(8.0);
-                        self.render_io_section(ui);
-                        ui.add_space(10.0);
-                        self.render_vst_section(ui);
-                    });
+                    self.active_panel = ActivePanel::Mixer;
                 }
                 ActivePanel::Mixer => {
                     let mut mixer_err: Option<String> =
@@ -3230,6 +3372,23 @@ impl eframe::App for ChronomixApp {
                     let had_err_msg = mixer_err.clone();
                     let mut wants_refresh_devices = false;
                     {
+                        let app_ptr: *mut ChronomixApp = self as *mut _;
+                        let mut render_settings_fn = |ui: &mut egui::Ui| {
+                            unsafe {
+                                (*app_ptr).render_settings_panel(ui);
+                            }
+                        };
+                        let mut render_news_fn = |ui: &mut egui::Ui| {
+                            unsafe {
+                                (*app_ptr).render_news_panel(ui);
+                            }
+                        };
+                        let mut change_lang_fn = |lang: Lang| {
+                            unsafe {
+                                (*app_ptr).lang = lang;
+                                (*app_ptr).save_settings();
+                            }
+                        };
                         let engine = &mut self.engine;
                         let mut stop_classic = || engine.stop_audio();
                         let mut flag_refresh = || {
@@ -3248,6 +3407,9 @@ impl eframe::App for ChronomixApp {
                                 error: &mut mixer_err,
                                 stop_classic_audio: &mut stop_classic,
                                 refresh_devices: &mut flag_refresh,
+                                render_settings: Some(&mut render_settings_fn),
+                                render_news: Some(&mut render_news_fn),
+                                change_lang: Some(&mut change_lang_fn),
                             },
                         );
                     }

@@ -32,6 +32,8 @@ pub enum WingScreenTab {
     Dyn,
     Vst,
     IoRec,
+    Settings,
+    News,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -202,6 +204,9 @@ pub struct MixerPanelContext<'a> {
     pub error: &'a mut Option<String>,
     pub stop_classic_audio: &'a mut dyn FnMut(),
     pub refresh_devices: &'a mut dyn FnMut(),
+    pub render_settings: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
+    pub render_news: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
+    pub change_lang: Option<&'a mut dyn FnMut(Lang)>,
 }
 
 pub fn render_mixer_panel(ui: &mut egui::Ui, ctx: MixerPanelContext<'_>) {
@@ -241,39 +246,47 @@ pub fn render_mixer_panel(ui: &mut egui::Ui, ctx: MixerPanelContext<'_>) {
 
 fn render_upper_console_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let avail_w = ui.available_width();
+    let screen_h = ui.ctx().content_rect().height();
+    let deck_h = (screen_h * 0.40).clamp(340.0, 440.0).floor();
     if avail_w >= 860.0 {
         let gap = ui.spacing().item_spacing.x;
         let monitor_w = (avail_w * 0.24).clamp(206.0, 246.0).floor();
         let screen_w = (avail_w - monitor_w - gap - 2.0).max(320.0).floor();
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
-                Vec2::new(screen_w, 0.0),
+                Vec2::new(screen_w, deck_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_min_height(deck_h);
+                    ui.set_max_height(deck_h);
                     ui.set_max_width(screen_w);
-                    render_wing_touchscreen(ui, ctx);
+                    render_wing_touchscreen(ui, ctx, deck_h);
                 },
             );
             ui.allocate_ui_with_layout(
-                Vec2::new(monitor_w, 0.0),
+                Vec2::new(monitor_w, deck_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_min_height(deck_h);
+                    ui.set_max_height(deck_h);
                     ui.set_max_width(monitor_w);
-                    render_wing_monitor_deck(ui, ctx);
+                    render_wing_monitor_deck(ui, ctx, deck_h);
                 },
             );
         });
     } else {
-        render_wing_touchscreen(ui, ctx);
+        render_wing_touchscreen(ui, ctx, deck_h);
         ui.add_space(8.0);
-        render_wing_monitor_deck(ui, ctx);
+        render_wing_monitor_deck(ui, ctx, deck_h);
     }
 }
 
-fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
+fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>, deck_h: f32) {
     let t = ctx.lang.text();
     let outer_w = ui.available_width().max(220.0);
     ui.set_max_width(outer_w);
+    ui.set_min_height(deck_h);
+    ui.set_max_height(deck_h);
     let narrow = outer_w < 660.0;
 
     egui::Frame::new()
@@ -284,6 +297,9 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
         .show(ui, |ui| {
             let bezel_w = ui.available_width().max(200.0);
             ui.set_max_width(bezel_w);
+            let inner_h = (deck_h - 16.0).max(180.0);
+            ui.set_min_height(inner_h);
+            ui.set_max_height(inner_h);
             let tabs = [
                 (WingScreenTab::Home, t.mixer_tab_home),
                 (WingScreenTab::Source, t.mixer_tab_source),
@@ -291,6 +307,8 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                 (WingScreenTab::Dyn, t.mixer_tab_dyn),
                 (WingScreenTab::Vst, t.mixer_tab_vst),
                 (WingScreenTab::IoRec, t.mixer_tab_io),
+                (WingScreenTab::Settings, t.mixer_tab_settings),
+                (WingScreenTab::News, t.mixer_tab_news),
             ];
 
             if narrow {
@@ -299,17 +317,19 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                         draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, 80.0);
                     }
                 });
-                ui.add_space(6.0);
-                render_touchscreen_display(ui, ctx);
+                ui.add_space(4.0);
+                let disp_h = ui.available_height().max(140.0);
+                render_touchscreen_display(ui, ctx, disp_h);
             } else {
                 let tab_w = 84.0;
                 let gap = ui.spacing().item_spacing.x + 4.0;
                 let disp_w = (bezel_w - tab_w - gap).max(200.0).floor();
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(tab_w, 0.0),
+                        Vec2::new(tab_w, inner_h),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
+                            ui.set_max_height(inner_h);
                             ui.spacing_mut().item_spacing.y = 5.0;
                             for (tab, label) in tabs {
                                 draw_wing_bezel_tab(ui, &mut ctx.state.active_tab, tab, label, tab_w);
@@ -318,11 +338,13 @@ fn render_wing_touchscreen(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
                     );
                     ui.add_space(4.0);
                     ui.allocate_ui_with_layout(
-                        Vec2::new(disp_w, 0.0),
+                        Vec2::new(disp_w, inner_h),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
                             ui.set_max_width(disp_w);
-                            render_touchscreen_display(ui, ctx);
+                            ui.set_min_height(inner_h);
+                            ui.set_max_height(inner_h);
+                            render_touchscreen_display(ui, ctx, inner_h);
                         },
                     );
                 });
@@ -429,10 +451,12 @@ fn draw_wing_bezel_tab(
     }
 }
 
-fn render_touchscreen_display(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
+fn render_touchscreen_display(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>, total_h: f32) {
     let t = ctx.lang.text();
     let disp_w = ui.available_width().max(180.0);
     ui.set_max_width(disp_w);
+    ui.set_min_height(total_h);
+    ui.set_max_height(total_h);
 
     egui::Frame::new()
         .fill(WingColors::SCREEN)
@@ -442,25 +466,146 @@ fn render_touchscreen_display(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>
         .show(ui, |ui| {
             let inner_w = ui.available_width().max(160.0);
             ui.set_max_width(inner_w);
+            let frame_inner_h = (total_h - 16.0).max(120.0);
+            ui.set_min_height(frame_inner_h);
+            ui.set_max_height(frame_inner_h);
+
             render_screen_header(ui, ctx);
             ui.add_space(5.0);
-            render_screen_signal_blocks(ui, ctx, t);
-            ui.add_space(6.0);
-
-            match ctx.state.active_tab {
-                WingScreenTab::Home => render_screen_home_tab(ui, ctx),
-                WingScreenTab::Source => render_screen_source_tab(ui, ctx),
-                WingScreenTab::Eq => render_screen_eq_tab(ui, ctx),
-                WingScreenTab::Dyn => render_screen_dyn_tab(ui, ctx),
-                WingScreenTab::Vst => render_screen_vst_tab(ui, ctx),
-                WingScreenTab::IoRec => render_screen_io_rec_tab(ui, ctx),
+            if ctx.state.active_tab != WingScreenTab::Settings && ctx.state.active_tab != WingScreenTab::News {
+                render_screen_signal_blocks(ui, ctx, t);
+                ui.add_space(6.0);
             }
+
+            let scroll_h = ui.available_height().max(100.0);
+            egui::ScrollArea::vertical()
+                .id_salt("touchscreen_tab_scroll_container")
+                .max_height(scroll_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    match ctx.state.active_tab {
+                        WingScreenTab::Home => render_screen_home_tab(ui, ctx),
+                        WingScreenTab::Source => render_screen_source_tab(ui, ctx),
+                        WingScreenTab::Eq => render_screen_eq_tab(ui, ctx),
+                        WingScreenTab::Dyn => render_screen_dyn_tab(ui, ctx),
+                        WingScreenTab::Vst => render_screen_vst_tab(ui, ctx),
+                        WingScreenTab::IoRec => render_screen_io_rec_tab(ui, ctx),
+                        WingScreenTab::Settings => {
+                            if let Some(ref mut render_settings) = ctx.render_settings {
+                                render_settings(ui);
+                            }
+                        }
+                        WingScreenTab::News => {
+                            if let Some(ref mut render_news) = ctx.render_news {
+                                render_news(ui);
+                            }
+                        }
+                    }
+                });
         });
 }
 
 fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
     let ch_count = ctx.mixer.channels().len();
     let t = ctx.lang.text();
+
+    if ctx.state.active_tab == WingScreenTab::Settings {
+        ui.horizontal_wrapped(|ui| {
+            egui::Frame::new()
+                .fill(Color32::from_rgb(26, 30, 40))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(70, 78, 96)))
+                .corner_radius(CornerRadius::same(2))
+                .inner_margin(Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(t.mixer_tab_settings)
+                            .strong()
+                            .size(12.0)
+                            .color(Color32::WHITE),
+                    );
+                });
+            ui.label(
+                RichText::new(t.settings_subtitle)
+                    .small()
+                    .color(StudioPalette::TEXT_SECONDARY),
+            );
+            ui.separator();
+            for lang in [Lang::En, Lang::Es] {
+                let selected = ctx.lang == lang;
+                let btn = egui::Button::new(
+                    RichText::new(lang.code())
+                        .small()
+                        .strong()
+                        .color(if selected {
+                            Color32::WHITE
+                        } else {
+                            StudioPalette::TEXT_SECONDARY
+                        }),
+                )
+                .fill(if selected {
+                    Color32::from_rgb(46, 52, 68)
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .corner_radius(CornerRadius::same(2));
+                if ui.add(btn).clicked() {
+                    if let Some(ref mut cl) = ctx.change_lang {
+                        cl(lang);
+                    }
+                }
+            }
+        });
+        return;
+    }
+
+    if ctx.state.active_tab == WingScreenTab::News {
+        ui.horizontal_wrapped(|ui| {
+            egui::Frame::new()
+                .fill(Color32::from_rgb(26, 30, 40))
+                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(70, 78, 96)))
+                .corner_radius(CornerRadius::same(2))
+                .inner_margin(Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(t.mixer_tab_news)
+                            .strong()
+                            .size(12.0)
+                            .color(Color32::WHITE),
+                    );
+                });
+            ui.label(
+                RichText::new("Chronomix Studio DAW · VST2 / VST3 / Wine")
+                    .small()
+                    .color(StudioPalette::TEXT_SECONDARY),
+            );
+            ui.separator();
+            for lang in [Lang::En, Lang::Es] {
+                let selected = ctx.lang == lang;
+                let btn = egui::Button::new(
+                    RichText::new(lang.code())
+                        .small()
+                        .strong()
+                        .color(if selected {
+                            Color32::WHITE
+                        } else {
+                            StudioPalette::TEXT_SECONDARY
+                        }),
+                )
+                .fill(if selected {
+                    Color32::from_rgb(46, 52, 68)
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .corner_radius(CornerRadius::same(2));
+                if ui.add(btn).clicked() {
+                    if let Some(ref mut cl) = ctx.change_lang {
+                        cl(lang);
+                    }
+                }
+            }
+        });
+        return;
+    }
 
     ui.horizontal_wrapped(|ui| {
         let (tag_bg, tag_title, src_summary, maybe_icon, mut maybe_ch_rec) =
@@ -664,6 +809,31 @@ fn render_screen_header(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
             )
         };
         ui.label(RichText::new(stat_lbl).small().monospace().color(stat_col));
+        ui.separator();
+        for lang in [Lang::En, Lang::Es] {
+            let selected = ctx.lang == lang;
+            let btn = egui::Button::new(
+                RichText::new(lang.code())
+                    .small()
+                    .strong()
+                    .color(if selected {
+                        Color32::WHITE
+                    } else {
+                        StudioPalette::TEXT_SECONDARY
+                    }),
+            )
+            .fill(if selected {
+                Color32::from_rgb(46, 52, 68)
+            } else {
+                Color32::TRANSPARENT
+            })
+            .corner_radius(CornerRadius::same(2));
+            if ui.add(btn).clicked() {
+                if let Some(ref mut cl) = ctx.change_lang {
+                    cl(lang);
+                }
+            }
+        }
     });
 }
 
@@ -2328,7 +2498,7 @@ fn render_screen_io_rec_tab(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         });
 }
 
-fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) {
+fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>, deck_h: f32) {
     let t = ctx.lang.text();
     let live = ctx.mixer.is_audio_running();
     let recording = ctx.mixer.is_recording();
@@ -2341,6 +2511,8 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         .count();
     let outer_w = ui.available_width().max(180.0);
     ui.set_max_width(outer_w);
+    ui.set_min_height(deck_h);
+    ui.set_max_height(deck_h);
 
     egui::Frame::new()
         .fill(WingColors::DECK)
@@ -2350,8 +2522,17 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
         .show(ui, |ui| {
             let deck_w = ui.available_width().max(160.0);
             ui.set_max_width(deck_w);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
+            let inner_h = (deck_h - 16.0).max(180.0);
+            ui.set_min_height(inner_h);
+            ui.set_max_height(inner_h);
+
+            egui::ScrollArea::vertical()
+                .id_salt("wing_monitor_deck_fixed_scroll")
+                .max_height(inner_h)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
                     let (pw_lbl, pw_col) = if live {
                         (t.mixer_power_on, StudioPalette::ACCENT_EMERALD)
                     } else {
@@ -2543,6 +2724,7 @@ fn render_wing_monitor_deck(ui: &mut egui::Ui, ctx: &mut MixerPanelContext<'_>) 
                 ui.add_space(4.0);
                 render_global_playback_section(ui, ctx, deck_w);
             }
+                });
         });
 }
 
