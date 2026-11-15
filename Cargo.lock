@@ -2827,7 +2827,7 @@ dependencies = [
 
 [[package]]
 name = "pedal-app"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "eframe",
  "egui",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "pedal-audio"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "cpal",
  "log",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "pedal-engine"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "hound",
  "libloading",
@@ -2868,7 +2868,7 @@ dependencies = [
 
 [[package]]
 name = "pedal-wine"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "log",

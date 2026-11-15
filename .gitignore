@@ -1,4 +1,6 @@
 /target/
+/dist/
+/chronomix-mix-*/
 *.wav
 .DS_Store
 /vst_plugins/*

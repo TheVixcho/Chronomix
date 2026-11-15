@@ -1,36 +1,88 @@
-# Chronomix
+# Chronomix — Studio Audio DAW & Digital Mixer (`v0.0.1`)
 
-**Chronomix** is a cross-platform real-time **Audio DAW** (Digital Audio Workstation) and **VST2 / VST3 host** written in native Rust (`eframe`/`egui` + `cpal` + `vst3-host` + `libloading`), with integrated Wine VST2 (`.dll`) and VST3 (`.vst3`) bridging on Linux so you can monitor, process live audio with effects, tweak plugin interfaces, and record WAV takes in real time.
+**Creado por [TheVixcho](https://github.com/TheVixcho)** · **Licencia [MIT](LICENSE)**
 
-## Workspace Structure
+**Chronomix** es una estación de trabajo de audio digital (**DAW**), consola de mezcla digital profesional inspirada en **Behringer X32 / Wing** y host nativo **VST2 / VST3** multiplataforma escrito en Rust (`eframe`/`egui` + `cpal` + `vst3-host` + `libloading`), con puente integrado para plugins de Windows (64 bits `.dll` / `.vst3`) sobre Linux mediante Wine.
 
-- `crates/pedal-audio` — Cross-platform full-duplex `cpal` I/O, device deduplication, mono-to-stereo upmixing, sample-rate bridging, and lock-free `rtrb` ring buffer.
-- `crates/pedal-engine` — Real-time DSP pipeline, native VST2 (`.so`/`.dll`) & VST3 (`.vst3`) hosting, Wine VST2/VST3 orchestration, VST folder discovery (`vst_plugins/`), peak meters, and lock-free WAV recording (`hound`).
-- `crates/pedal-wine` — Automatic PE/ELF binary detection and Winelib VST2/VST3 host (`chronomix-wine-host`) for running 64-bit Windows `.vst3` and `.dll` plugins transparently on Linux via shared memory and `AF_UNIX` IPC.
-- `crates/pedal-app` — Native `eframe`/`egui` desktop DAW interface (`chronomix`) with **What's New**, **Recording**, and **Settings** panels (`ES` / `EN`).
+---
 
-## Build & Run
+## Instalación Rápida
+
+### Windows (Instalador Oficial `.exe`)
+1. Descarga **`Chronomix-Setup-v0.0.1-Windows-x64.exe`** desde la sección de [Releases](https://github.com/TheVixcho/chronomix/releases/latest).
+2. Ejecuta el instalador, acepta la licencia **MIT (TheVixcho)** y marca la casilla **"Crear un icono en el escritorio"**.
+3. Abre **Chronomix** desde tu Escritorio o Menú Inicio.
+
+### Linux (Instalación en 1 Comando)
+Pega este comando en tu terminal para descargar, instalar el binario y crear el acceso directo en tu Escritorio y menú de aplicaciones:
 
 ```bash
-cargo run --release
+curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
 ```
 
-Or explicitly:
+También puedes instalar el paquete `.deb` en Ubuntu / Debian / Linux Mint:
 
 ```bash
-cargo run --bin chronomix
+curl -fLO https://github.com/TheVixcho/chronomix/releases/latest/download/chronomix_latest_amd64.deb
+sudo dpkg -i chronomix_latest_amd64.deb
 ```
 
-Run tests:
+### macOS (Instalación en 1 Comando o `.dmg`)
+Con un solo comando en la terminal:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
+```
+
+O descarga **`Chronomix-v0.0.1-macOS.dmg`** desde [Releases](https://github.com/TheVixcho/chronomix/releases/latest) y arrastra `Chronomix.app` a tu carpeta `Applications`.
+
+---
+
+## Características Principales (`v0.0.1`)
+
+- **Consola Digital Profesional (Estilo Behringer Wing / X32)**:
+  - Interfaz en escala de grises y negro de alto contraste con botones táctiles biselados efecto vidrio/goma y faders motorizados.
+  - Bancos de canales dedicados a la izquierda: `CH 1-16`, `CH 17-32`, `CH 33-48` y `MULTIMEDIA`, con scroll horizontal fluido.
+  - Pantalla superior de consola con altura fija proporcional (`HOME`, `FUENTE`, `EQ`, `DINÁMICA`, `RACK VST`, `SALIDA / REC`, `AJUSTES`, `NOVEDADES`).
+- **Canales Personalizables y Multimedia**:
+  - Por defecto inicia con 2 canales listos para usar; permite agregar hasta 48 canales.
+  - Iconos predeterminados por instrumento (Voz, Guitarra, Bajo, Batería, Teclado, Podcast, Multimedia) o importación de imagen personalizada.
+  - Selector de color por canal desde la pestaña `FUENTE` (negro por defecto).
+  - Controles de reproducción Multimedia (`Play/Pause`, `Stop`, `-10s`, `+10s`, `Loop`) por canal, barra inferior dedicada en el banco Multimedia y sección de **Producción / Playback Global** para disparar todas las pistas multimedia al unísono.
+- **Grabación Multipista Selectiva (`REC`)**:
+  - Cada canal cuenta con un botón `REC` independiente: solo se graban en archivos `.wav` separados los canales que tienen `REC` activado, más la mezcla maestra opcional.
+- **Procesamiento DSP & Salida de Micrófono Virtual (Discord / OBS)**:
+  - Trim de entrada, Balance estéreo, Inversión de fase (`Ø`), Filtros HPF / LPF, EQ paramétrico de 4 bandas, Noise Gate, Compresor y hasta 4 inserciones VST2/VST3 por canal y en el bus Master.
+  - Botón **Mic Virtual (OBS / Discord)** para digitalizar y enrutar la salida maestra como un micrófono virtual hacia Discord, OBS Studio, Zoom o navegadores.
+- **Barra Inferior Estilo DaVinci Resolve & Biblioteca de Audio**:
+  - Navegación inferior rápida entre **Mixer** y **Biblioteca**.
+  - En **Biblioteca**, explora todas las grabaciones guardadas por el usuario y asígnalas con un clic a un canal Multimedia nuevo o existente.
+
+---
+
+## Automatización de Releases (CI/CD con GitHub Actions)
+
+El repositorio incluye el flujo automatizado [`.github/workflows/release.yml`](.github/workflows/release.yml).
+Cada vez que cambies la versión en `Cargo.toml` y hagas push a `main`, o publiques un nuevo tag:
+
+```bash
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+GitHub Actions encenderá automáticamente máquinas virtuales de **Windows**, **Linux** y **macOS**, compilará el proyecto en modo `--release`, empaquetará el instalador `.exe` (con Inno Setup, licencia MIT y acceso directo en escritorio), el paquete `.deb`, el `.dmg` de macOS y el instalador `install.sh`, y los publicará en **GitHub Releases**.
+
+---
+
+## Compilar desde el Código Fuente
+
+```bash
+cargo build --release --bin chronomix
 cargo test --workspace
 ```
 
-### Linux Notes
-- Requires ALSA development headers (`libasound2-dev` / `alsa-lib-devel`), PipeWire (`pipewire-alsa` / `pipewire-pulse`) or PulseAudio for low-latency audio monitoring, and X11/Wayland/GTK3 dev libs for `eframe` and `rfd`.
-- For automatic 64-bit Windows `.vst3` / `.dll` (VST2) support on Linux, ensure `wine` (and optionally `wineg++`) is installed. Chronomix's **Settings -> Wine** manager automatically detects `~/.wine`, Bottles, Lutris, Heroic, and custom prefixes, auto-configures `x11,wayland` graphics drivers for Wayland/Hyprland/X11 sessions, compiles the Winelib bridge at runtime if needed, and lets you initialize prefixes or launch `.exe`/`.msi` VST installers, `winecfg`, Explorer, and `winetricks` directly inside the app.
+---
 
-### Windows / macOS Notes
-- On Windows, WASAPI works out of the box; for ASIO support in `cpal`, enable `cpal`'s `asio` feature with the Steinberg ASIO SDK configured.
-- On macOS, CoreAudio is used natively.
+## Licencia
+
+Distribuido bajo la licencia **MIT**. Creado por **TheVixcho**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
