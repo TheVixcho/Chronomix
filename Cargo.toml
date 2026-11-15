@@ -9,9 +9,11 @@ members = [
 default-members = ["crates/pedal-app"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 license = "MIT"
+authors = ["TheVixcho"]
+repository = "https://github.com/TheVixcho/chronomix"
 
 [workspace.dependencies]
 cpal = { version = "0.18.2", features = ["pipewire", "pulseaudio"] }

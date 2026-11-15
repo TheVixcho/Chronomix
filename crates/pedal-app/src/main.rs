@@ -1,5 +1,8 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod i18n;
 mod library_ui;
+#[allow(dead_code)]
 mod midi_ui;
 mod mixer_ui;
 mod theme;
@@ -823,12 +826,6 @@ impl ChronomixApp {
                 StudioIcon::Sliders,
                 t.nav_resolve_mixer,
                 Color32::from_rgb(90, 180, 255),
-            ),
-            (
-                ActivePanel::Midi,
-                StudioIcon::Piano,
-                t.nav_resolve_midi,
-                Color32::from_rgb(240, 160, 120),
             ),
             (
                 ActivePanel::Library,
