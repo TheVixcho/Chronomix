@@ -9,25 +9,25 @@ use eframe::egui::{
 pub struct StudioPalette;
 
 impl StudioPalette {
-    pub const BG_DEEP: Color32 = Color32::from_rgb(12, 14, 20);
-    pub const BG_PANEL: Color32 = Color32::from_rgb(17, 20, 28);
-    pub const BG_CARD: Color32 = Color32::from_rgb(23, 27, 38);
-    pub const BG_ELEVATED: Color32 = Color32::from_rgb(31, 37, 52);
-    pub const BG_INPUT: Color32 = Color32::from_rgb(15, 18, 25);
+    pub const BG_DEEP: Color32 = Color32::from_rgb(10, 10, 12);
+    pub const BG_PANEL: Color32 = Color32::from_rgb(18, 18, 22);
+    pub const BG_CARD: Color32 = Color32::from_rgb(24, 24, 28);
+    pub const BG_ELEVATED: Color32 = Color32::from_rgb(34, 34, 40);
+    pub const BG_INPUT: Color32 = Color32::from_rgb(14, 14, 17);
 
-    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(42, 49, 68);
-    pub const BORDER_BRIGHT: Color32 = Color32::from_rgb(68, 82, 114);
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(46, 46, 54);
+    pub const BORDER_BRIGHT: Color32 = Color32::from_rgb(76, 76, 88);
 
-    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(14, 165, 233);
-    pub const ACCENT_BLUE: Color32 = Color32::from_rgb(59, 130, 246);
-    pub const ACCENT_PURPLE: Color32 = Color32::from_rgb(168, 85, 247);
-    pub const ACCENT_EMERALD: Color32 = Color32::from_rgb(16, 185, 129);
-    pub const ACCENT_AMBER: Color32 = Color32::from_rgb(245, 158, 11);
-    pub const ACCENT_CRIMSON: Color32 = Color32::from_rgb(239, 68, 68);
+    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(230, 234, 242);
+    pub const ACCENT_BLUE: Color32 = Color32::from_rgb(56, 58, 68);
+    pub const ACCENT_PURPLE: Color32 = Color32::from_rgb(195, 198, 208);
+    pub const ACCENT_EMERALD: Color32 = Color32::from_rgb(215, 220, 228);
+    pub const ACCENT_AMBER: Color32 = Color32::from_rgb(200, 204, 214);
+    pub const ACCENT_CRIMSON: Color32 = Color32::from_rgb(215, 45, 45);
 
-    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(241, 245, 249);
-    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(148, 163, 184);
-    pub const TEXT_MUTED: Color32 = Color32::from_rgb(100, 116, 139);
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(255, 255, 255);
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(190, 195, 205);
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(125, 130, 140);
 }
 
 /// Vector icons painted directly with `egui::Painter` so they never depend on emoji fonts or show tofu `□`.
@@ -290,15 +290,15 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, StudioPalette::TEXT_PRIMARY);
     visuals.widgets.inactive.corner_radius = rounding;
 
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(43, 52, 74);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(43, 52, 74);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(40, 42, 50);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 42, 50);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.2_f32, Color32::from_rgb(180, 185, 195));
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
     visuals.widgets.hovered.corner_radius = rounding;
     visuals.widgets.hovered.expansion = 0.0;
 
-    visuals.widgets.active.bg_fill = StudioPalette::ACCENT_BLUE;
-    visuals.widgets.active.weak_bg_fill = StudioPalette::ACCENT_BLUE;
+    visuals.widgets.active.bg_fill = Color32::from_rgb(56, 58, 68);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(56, 58, 68);
     visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, Color32::WHITE);
     visuals.widgets.active.fg_stroke = Stroke::new(2.0_f32, Color32::WHITE);
     visuals.widgets.active.corner_radius = rounding;
@@ -306,13 +306,13 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
 
     visuals.widgets.open.bg_fill = StudioPalette::BG_ELEVATED;
     visuals.widgets.open.weak_bg_fill = StudioPalette::BG_ELEVATED;
-    visuals.widgets.open.bg_stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
+    visuals.widgets.open.bg_stroke = Stroke::new(1.2_f32, Color32::from_rgb(180, 185, 195));
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.open.corner_radius = rounding;
     visuals.widgets.open.expansion = 0.0;
 
-    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(14, 165, 233, 75);
-    visuals.selection.stroke = Stroke::new(1.2_f32, StudioPalette::ACCENT_CYAN);
+    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(220, 225, 235, 40);
+    visuals.selection.stroke = Stroke::new(1.2_f32, Color32::from_rgb(220, 225, 235));
 
     visuals.popup_shadow = Shadow {
         offset: [0, 3],
@@ -508,24 +508,22 @@ pub fn draw_rotary_knob(
                 let p1 = center + dir * (track_r + 2.0);
                 let p2 = center + dir * (track_r + 4.2);
                 let tick_col = if tick_t <= anim_norm + 0.01 {
-                    lerp_color(StudioPalette::TEXT_MUTED, accent, 0.85)
+                    Color32::WHITE
                 } else {
-                    Color32::from_rgb(45, 52, 70)
+                    Color32::from_rgb(44, 46, 54)
                 };
                 painter.line_segment([p1, p2], Stroke::new(1.2_f32, tick_col));
             }
 
-            // Background arc
             draw_arc(
                 painter,
                 center,
                 track_r,
                 start_angle,
                 start_angle + total_sweep,
-                Stroke::new(3.0_f32, Color32::from_rgb(33, 39, 54)),
+                Stroke::new(3.0_f32, Color32::from_rgb(30, 31, 38)),
             );
 
-            // Active value arc
             if anim_norm > 0.005 {
                 let end_angle = start_angle + anim_norm * total_sweep;
                 draw_arc(
@@ -534,17 +532,16 @@ pub fn draw_rotary_knob(
                     track_r,
                     start_angle,
                     end_angle,
-                    Stroke::new(3.2_f32, accent),
+                    Stroke::new(3.2_f32, Color32::from_rgb(230, 234, 242)),
                 );
             }
 
-            // Knob cap
             painter.circle_filled(
                 center,
                 outer_r,
                 lerp_color(
-                    Color32::from_rgb(28, 33, 46),
-                    Color32::from_rgb(38, 45, 62),
+                    Color32::from_rgb(24, 25, 30),
+                    Color32::from_rgb(36, 38, 46),
                     hover_t,
                 ),
             );
@@ -553,7 +550,7 @@ pub fn draw_rotary_knob(
                 outer_r,
                 Stroke::new(
                     1.2_f32,
-                    lerp_color(StudioPalette::BORDER_SUBTLE, accent, hover_t * 0.7),
+                    lerp_color(StudioPalette::BORDER_SUBTLE, Color32::WHITE, hover_t * 0.7),
                 ),
             );
 
@@ -678,13 +675,11 @@ pub fn draw_studio_vu_meter(
                         );
 
                         let base_col = if seg_t > 0.90 {
-                            StudioPalette::ACCENT_CRIMSON
+                            Color32::from_rgb(225, 45, 45)
                         } else if seg_t > 0.72 {
-                            StudioPalette::ACCENT_AMBER
-                        } else if seg_t > 0.50 {
-                            Color32::from_rgb(132, 204, 22)
+                            Color32::from_rgb(215, 218, 226)
                         } else {
-                            StudioPalette::ACCENT_EMERALD
+                            Color32::from_rgb(175, 180, 192)
                         };
 
                         let is_lit = norm >= seg_t - (0.5 / segments as f32);

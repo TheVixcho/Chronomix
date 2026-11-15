@@ -696,12 +696,12 @@ impl ChronomixApp {
                 painter.rect_filled(
                     logo_rect,
                     CornerRadius::same(2),
-                    Color32::from_rgb(20, 32, 54),
+                    Color32::from_rgb(20, 20, 24),
                 );
                 painter.rect_stroke(
                     logo_rect,
                     CornerRadius::same(2),
-                    Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN),
+                    Stroke::new(1.0_f32, Color32::from_rgb(180, 185, 195)),
                     StrokeKind::Inside,
                 );
                 let static_bars: [f32; 4] = [0.45, 0.85, 0.65, 0.38];
@@ -715,7 +715,7 @@ impl ChronomixApp {
                     painter.rect_filled(
                         bar_rect,
                         CornerRadius::same(1),
-                        StudioPalette::ACCENT_CYAN,
+                        Color32::from_rgb(220, 225, 235),
                     );
                 }
             }
@@ -732,7 +732,7 @@ impl ChronomixApp {
                     ui.label(
                         RichText::new("STUDIO DAW  |  VST2 / VST3")
                             .size(9.5)
-                            .color(StudioPalette::ACCENT_CYAN),
+                            .color(Color32::from_rgb(170, 175, 185)),
                     );
                 });
             } else {
@@ -799,14 +799,14 @@ impl ChronomixApp {
                     let painter = ui.painter();
                     let bg = lerp_color(
                         lerp_color(StudioPalette::BG_PANEL, StudioPalette::BG_ELEVATED, hov_t),
-                        Color32::from_rgb(27, 56, 98),
+                        Color32::from_rgb(42, 44, 52),
                         sel_t,
                     );
                     painter.rect_filled(rect, CornerRadius::same(2), bg);
 
                     let border_col = lerp_color(
                         StudioPalette::BORDER_SUBTLE,
-                        StudioPalette::ACCENT_CYAN,
+                        Color32::from_rgb(180, 185, 195),
                         sel_t.max(hov_t * 0.5),
                     );
                     painter.rect_stroke(
@@ -816,7 +816,6 @@ impl ChronomixApp {
                         StrokeKind::Inside,
                     );
 
-                    // Bottom active indicator bar
                     if sel_t > 0.02 {
                         let bar_w = (rect.width() - 8.0) * sel_t;
                         let bar_rect = Rect::from_center_size(
@@ -826,7 +825,7 @@ impl ChronomixApp {
                         painter.rect_filled(
                             bar_rect,
                             CornerRadius::same(1),
-                            StudioPalette::ACCENT_CYAN,
+                            Color32::WHITE,
                         );
                     }
 
@@ -837,7 +836,7 @@ impl ChronomixApp {
                     );
                     let icon_col = lerp_color(
                         StudioPalette::TEXT_SECONDARY,
-                        StudioPalette::ACCENT_CYAN,
+                        Color32::WHITE,
                         sel_t.max(hov_t * 0.7),
                     );
                     let total_w = 13.0 + 6.0 + text_w;
@@ -965,7 +964,7 @@ impl ChronomixApp {
                     |ui| {
                         ui.horizontal_wrapped(|ui| {
                             egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(14, 165, 233, 35))
+                                .fill(Color32::from_rgba_unmultiplied(230, 234, 242, 25))
                                 .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_CYAN))
                                 .corner_radius(CornerRadius::same(2))
                                 .inner_margin(Margin::symmetric(8, 2))
@@ -1166,8 +1165,8 @@ impl ChronomixApp {
                     studio_card(ui, None, Margin::same(12), |ui| {
                         ui.horizontal_wrapped(|ui| {
                             egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(59, 130, 246, 45))
-                                .stroke(Stroke::new(1.0_f32, StudioPalette::ACCENT_BLUE))
+                                .fill(Color32::from_rgba_unmultiplied(200, 204, 215, 30))
+                                .stroke(Stroke::new(1.0_f32, Color32::from_rgb(100, 105, 115)))
                                 .corner_radius(CornerRadius::same(2))
                                 .inner_margin(Margin::symmetric(7, 2))
                                 .show(ui, |ui| {
