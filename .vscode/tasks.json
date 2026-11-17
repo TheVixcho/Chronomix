@@ -100,6 +100,21 @@
             "problemMatcher": [
                 "$rustc"
             ]
+        },
+        {
+            "label": "chronomix: build windows (.exe)",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "${workspaceFolder}/build-release.sh"
+            ],
+            "dependsOn": [
+                "chronomix: check dependencies"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$rustc"
+            ]
         }
     ]
 }

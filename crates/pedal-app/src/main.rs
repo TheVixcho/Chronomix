@@ -828,6 +828,12 @@ impl ChronomixApp {
                 Color32::from_rgb(90, 180, 255),
             ),
             (
+                ActivePanel::Midi,
+                StudioIcon::Piano,
+                t.nav_resolve_midi,
+                Color32::from_rgb(240, 160, 120),
+            ),
+            (
                 ActivePanel::Library,
                 StudioIcon::Folder,
                 t.nav_resolve_library,

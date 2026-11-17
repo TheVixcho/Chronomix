@@ -662,6 +662,53 @@ impl RtMediaSlot {
             }
         }
     }
+
+    fn render_additive_into(
+        &mut self,
+        buf_l: &mut [f32],
+        buf_r: &mut [f32],
+        frames: usize,
+        out_sr: f64,
+        trim_lin: f32,
+    ) {
+        if !self.playing {
+            return;
+        }
+        let Some(ref buf) = self.buffer else {
+            self.playing = false;
+            return;
+        };
+        if buf.total_frames == 0 || buf.interleaved_stereo.len() < 2 {
+            self.playing = false;
+            return;
+        }
+        let step = (buf.sample_rate.max(1) as f64) / out_sr.max(1.0);
+        let total_f = buf.total_frames as f64;
+        for i in 0..frames {
+            if self.pos_frames >= total_f {
+                self.playing = false;
+                self.pos_frames = total_f;
+                break;
+            }
+            let idx0 = (self.pos_frames.floor() as usize).min(buf.total_frames - 1);
+            let next_raw = idx0 + 1;
+            let idx1 = if next_raw < buf.total_frames {
+                next_raw
+            } else {
+                buf.total_frames - 1
+            };
+            let frac = (self.pos_frames - idx0 as f64).clamp(0.0, 1.0) as f32;
+            let b0 = idx0 * 2;
+            let b1 = idx1 * 2;
+            let l0 = buf.interleaved_stereo[b0];
+            let r0 = buf.interleaved_stereo[b0 + 1];
+            let l1 = buf.interleaved_stereo[b1];
+            let r1 = buf.interleaved_stereo[b1 + 1];
+            buf_l[i] += (l0 + (l1 - l0) * frac) * trim_lin;
+            buf_r[i] += (r0 + (r1 - r0) * frac) * trim_lin;
+            self.pos_frames += step;
+        }
+    }
 }
 
 struct RtChannelState {
@@ -676,6 +723,7 @@ struct RtChannelState {
     comp_env: f32,
     inserts: [RtInsertSlot; MAX_MIXER_INSERTS],
     media: RtMediaSlot,
+    preview: RtMediaSlot,
     rec_tx: Option<Producer<f32>>,
     buf_l: Vec<f32>,
     buf_r: Vec<f32>,
@@ -695,6 +743,7 @@ impl RtChannelState {
             comp_env: 0.0,
             inserts: std::array::from_fn(|_| RtInsertSlot::default()),
             media: RtMediaSlot::default(),
+            preview: RtMediaSlot::default(),
             rec_tx: None,
             buf_l: vec![0.0; max_frames],
             buf_r: vec![0.0; max_frames],
@@ -732,6 +781,10 @@ enum MixerCommand {
         looping: bool,
         seek_frame: Option<usize>,
         seq: u64,
+    },
+    TriggerChannelPreview {
+        ch: usize,
+        buffer: Arc<MediaBuffer>,
     },
     SetChannelInsert {
         ch: usize,
@@ -872,6 +925,14 @@ impl MixerDspProcessor {
                             c.media.pos_frames = frame as f64;
                         }
                         c.media.seq = seq;
+                    }
+                }
+                MixerCommand::TriggerChannelPreview { ch, buffer } => {
+                    if let Some(c) = self.channels.get_mut(ch) {
+                        c.preview.buffer = Some(buffer);
+                        c.preview.pos_frames = 0.0;
+                        c.preview.looping = false;
+                        c.preview.playing = true;
                     }
                 }
                 MixerCommand::SetChannelInsert {
@@ -1025,6 +1086,8 @@ impl MixerAudioProcessor for MixerDspProcessor {
             if ch.mode == ChannelInputMode::Multimedia {
                 ch.media
                     .render_into(&mut ch.buf_l, &mut ch.buf_r, frames, sample_rate, trim_lin);
+                ch.preview
+                    .render_additive_into(&mut ch.buf_l, &mut ch.buf_r, frames, sample_rate, trim_lin);
                 m_atomics.media_pos_frames.store(
                     ch.media.pos_frames.round().max(0.0) as u64,
                     Ordering::Relaxed,
@@ -1827,13 +1890,48 @@ impl MixerEngine {
         fallback_output_device: Option<&str>,
     ) -> Result<String, EngineError> {
         let fake_path = PathBuf::from(format!("custom-session:{title}"));
-        self.install_channel_media_buffer(ch, fake_path, buf, auto_play, fallback_output_device)
+        if ch < self.channels.len() {
+            self.channels[ch].media.looping = true;
+        }
+        let prev_pos = self
+            .channels
+            .get(ch)
+            .filter(|c| c.media.playing && auto_play)
+            .map(|c| c.media.current_frame.min(buf.total_frames.saturating_sub(1)))
+            .unwrap_or(0);
+        let res = self.install_channel_media_buffer(ch, fake_path, buf, auto_play, fallback_output_device)?;
+        if prev_pos > 0 {
+            let _ = self.set_media_transport(ch, auto_play, true, Some(prev_pos), fallback_output_device);
+        }
+        Ok(res)
+    }
+
+    pub fn trigger_channel_preview(
+        &mut self,
+        ch: usize,
+        buf: MediaBuffer,
+        fallback_output_device: Option<&str>,
+    ) -> Result<(), EngineError> {
+        if ch >= self.channels.len() {
+            return Ok(());
+        }
+        self.set_channel_multimedia(ch);
+        if self.cmd_tx.is_none() {
+            self.ensure_audio_running(fallback_output_device)?;
+        }
+        let arc = Arc::new(buf);
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::TriggerChannelPreview { ch, buffer: arc });
+        }
+        Ok(())
     }
 
     pub fn add_midi_channel(&mut self, name: &str) -> Option<usize> {
         let idx = self.add_multimedia_channel()?;
         if let Some(ch) = self.channels.get_mut(idx) {
             ch.name = name.to_string();
+            ch.icon = ChannelIcon::Keys;
+            ch.media.looping = true;
         }
         Some(idx)
     }

@@ -99,11 +99,41 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
 EOF
 
 cat > "${TMP_BUILD}/crt2.c" <<'EOF'
+#include <stdint.h>
+
+typedef void (*_PVFV)(void);
+typedef int (*_PIFV)(void);
+
+__attribute__((section(".CRT$XIA"), used)) _PIFV __xi_a[] = { 0 };
+__attribute__((section(".CRT$XIZ"), used)) _PIFV __xi_z[] = { 0 };
+__attribute__((section(".CRT$XCA"), used)) _PVFV __xc_a[] = { 0 };
+__attribute__((section(".CRT$XCZ"), used)) _PVFV __xc_z[] = { 0 };
+
+static void run_pifv(_PIFV *start, _PIFV *end) {
+    for (_PIFV *p = start; p < end; ++p) {
+        if (*p) (**p)();
+    }
+}
+
+static void run_pvfv(_PVFV *start, _PVFV *end) {
+    for (_PVFV *p = start; p < end; ++p) {
+        if (*p) (**p)();
+    }
+}
+
 extern int main(int argc, char **argv, char **envp);
 extern void exit(int status);
-void __main(void) {}
+void __main(void) {
+    static int initialized = 0;
+    if (!initialized) {
+        initialized = 1;
+        run_pifv(__xi_a, __xi_z);
+        run_pvfv(__xc_a, __xc_z);
+    }
+}
 int _setargv(void) { return 0; }
 int mainCRTStartup(void) {
+    __main();
     char *empty_argv[2] = { "chronomix.exe", 0 };
     int ret = main(1, empty_argv, 0);
     exit(ret);
@@ -117,6 +147,26 @@ cat > "${TMP_BUILD}/unwind_shim.c" <<'EOF'
 extern void abort(void);
 extern double sqrt(double);
 uint32_t _tls_index = 0;
+__attribute__((section(".tls$AAA"), used)) char _tls_start = 0;
+__attribute__((section(".tls$ZZZ"), used)) char _tls_end = 0;
+__attribute__((section(".CRT$XLA"), used)) void *_xl_a = 0;
+__attribute__((section(".CRT$XLZ"), used)) void *_xl_z = 0;
+typedef struct {
+    uintptr_t StartAddressOfRawData;
+    uintptr_t EndAddressOfRawData;
+    uintptr_t AddressOfIndex;
+    uintptr_t AddressOfCallBacks;
+    uint32_t SizeOfZeroFill;
+    uint32_t Characteristics;
+} IMAGE_TLS_DIRECTORY64;
+__attribute__((section(".rdata$T"), used)) const IMAGE_TLS_DIRECTORY64 _tls_used = {
+    (uintptr_t)&_tls_start,
+    (uintptr_t)&_tls_end,
+    (uintptr_t)&_tls_index,
+    (uintptr_t)&_xl_a,
+    0,
+    0
+};
 typedef int _Unwind_Reason_Code;
 typedef int _Unwind_Action;
 struct _Unwind_Context;
@@ -153,7 +203,7 @@ cat > "${MINGW_BIN}/x86_64-w64-mingw32-gcc" <<EOF
 filtered=()
 for arg in "\$@"; do
     case "\$arg" in
-        *rsbegin.o|*rsend.o|crtbegin.o|crtend.o) ;;
+        *rsbegin.o|*rsend.o|crtbegin.o|crtend.o|-Wl,--gc-sections) ;;
         *) filtered+=("\$arg") ;;
     esac
 done
@@ -238,7 +288,7 @@ cat > "${ARM64_BIN}/aarch64-w64-mingw32-clang" <<EOF
 filtered=()
 for arg in "\$@"; do
     case "\$arg" in
-        *rsbegin.o|*rsend.o|crtbegin.o|crtend.o) ;;
+        *rsbegin.o|*rsend.o|crtbegin.o|crtend.o|-Wl,--gc-sections) ;;
         *) filtered+=("\$arg") ;;
     esac
 done

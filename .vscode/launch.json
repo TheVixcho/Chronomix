@@ -84,6 +84,29 @@
             "env": {
                 "RUST_LOG": "info"
             }
+        },
+        {
+            "name": "Run Chronomix Windows (.exe via Wine)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "wine \"${workspaceFolder}/target/x86_64-pc-windows-gnu/release/chronomix.exe\"",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "chronomix: build windows (.exe)",
+            "env": {
+                "RUST_LOG": "info",
+                "WINEDEBUG": "-all"
+            }
+        },
+        {
+            "name": "Run Chronomix Windows Installer (.exe via Wine)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "wine \"${workspaceFolder}/dist/Chronomix-Setup-Windows-x64.exe\"",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "chronomix: build windows (.exe)",
+            "env": {
+                "WINEDEBUG": "-all"
+            }
         }
     ]
 }
