@@ -32,7 +32,7 @@ pub struct ResolvedVst3Target {
 pub enum WineError {
     #[error("Wine VST3 bridge is only used on Linux")]
     UnsupportedOs,
-    #[error("Wine VST3 host was not compiled (wineg++ missing at build time and runtime)")]
+    #[error("No se pudo cargar el plugin de Windows (.dll/.vst3): el puente Wine no fue compilado porque falta 'wineg++' (ni en compilación ni en tiempo de ejecución). Instala Wine con 'wineg++' (ej. wine / wine-devel / wine-staging) y recompila el puente desde Ajustes, o utiliza plugins nativos de Linux (.so / .vst3).")]
     BridgeNotBuilt,
     #[error("32-bit (x86) Windows VST3 is not supported by this 64-bit Wine bridge: {0}. Use the 64-bit (x64) .vst3 instead.")]
     UnsupportedArch32(String),

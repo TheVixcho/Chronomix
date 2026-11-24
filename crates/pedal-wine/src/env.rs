@@ -1116,6 +1116,19 @@ pub fn current_bridge_mode(preferred_wine: Option<&Path>) -> WineBridgeMode {
     }
 }
 
+pub fn wine_bridge_runtime_warning(config: &WineConfig) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let resolved_wine = resolve_wine_binary(config);
+    match current_bridge_mode(resolved_wine.as_deref()) {
+        WineBridgeMode::Unavailable => Some(
+            "Aviso Wine: 'wineg++' no estuvo disponible al compilar ni se detecta en el sistema. Los plugins de Windows (.dll / .vst3) no podrán cargarse hasta instalar Wine con 'wineg++' (paquete wine / wine-devel / wine-staging).".to_string(),
+        ),
+        _ => None,
+    }
+}
+
 /// Builds the command invocation for a Windows `.exe`, `.msi`, or `.bat`/`.cmd` file under Wine.
 pub fn wine_executable_args(target: &Path) -> Vec<String> {
     let ext = target

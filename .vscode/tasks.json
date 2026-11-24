@@ -14,7 +14,7 @@
                 "command": "sh",
                 "args": [
                     "-c",
-                    "command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1 || { echo 'Cargo.toml:1: error: Falta Rust/Cargo (instala con https://rustup.rs)'; exit 1; }"
+                    "command -v cargo >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 || { echo 'CMakeLists.txt:1: error: Faltan Rust/Cargo o CMake'; exit 1; }"
                 ]
             },
             "windows": {
@@ -22,39 +22,17 @@
                 "args": [
                     "-NoProfile",
                     "-Command",
-                    "if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Output 'Cargo.toml:1: error: Falta Rust/Cargo (instala con https://rustup.rs)'; exit 1 }"
+                    "if (-not (Get-Command cargo -ErrorAction SilentlyContinue) -or -not (Get-Command cmake -ErrorAction SilentlyContinue)) { Write-Output 'CMakeLists.txt:1: error: Faltan Rust/Cargo o CMake'; exit 1 }"
                 ]
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true,
-                "focus": false,
-                "showReuseMessage": false
-            },
-            "problemMatcher": {
-                "owner": "chronomix-deps",
-                "fileLocation": [
-                    "relative",
-                    "${workspaceFolder}"
-                ],
-                "pattern": {
-                    "regexp": "^([^:]+):(\\d+):\\s+(warning|error):\\s+(.*)$",
-                    "file": 1,
-                    "line": 2,
-                    "severity": 3,
-                    "message": 4
-                }
             }
         },
         {
-            "label": "cargo: build chronomix (debug)",
+            "label": "cmake: build chronomix (release)",
             "type": "shell",
-            "command": "cargo",
+            "command": "bash",
             "args": [
-                "build",
-                "--bin",
-                "chronomix"
+                "-c",
+                "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build --parallel"
             ],
             "dependsOn": [
                 "chronomix: check dependencies"
@@ -62,28 +40,20 @@
             "group": {
                 "kind": "build",
                 "isDefault": true
-            },
-            "problemMatcher": [
-                "$rustc"
-            ]
+            }
         },
         {
-            "label": "cargo: build chronomix (release)",
+            "label": "cmake: build chronomix (debug)",
             "type": "shell",
-            "command": "cargo",
+            "command": "bash",
             "args": [
-                "build",
-                "--release",
-                "--bin",
-                "chronomix"
+                "-c",
+                "cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build build-debug --parallel"
             ],
             "dependsOn": [
                 "chronomix: check dependencies"
             ],
-            "group": "build",
-            "problemMatcher": [
-                "$rustc"
-            ]
+            "group": "build"
         },
         {
             "label": "cargo: test workspace",
@@ -96,13 +66,10 @@
             "dependsOn": [
                 "chronomix: check dependencies"
             ],
-            "group": "test",
-            "problemMatcher": [
-                "$rustc"
-            ]
+            "group": "test"
         },
         {
-            "label": "chronomix: build windows (.exe)",
+            "label": "chronomix: package release",
             "type": "shell",
             "command": "bash",
             "args": [
@@ -111,10 +78,7 @@
             "dependsOn": [
                 "chronomix: check dependencies"
             ],
-            "group": "build",
-            "problemMatcher": [
-                "$rustc"
-            ]
+            "group": "build"
         }
     ]
 }

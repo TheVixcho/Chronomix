@@ -2,47 +2,23 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run Chronomix (cargo run)",
+            "name": "Run Chronomix (JUCE + Rust Release)",
             "type": "node-terminal",
             "request": "launch",
-            "command": "cargo run",
+            "command": "${workspaceFolder}/build/chronomix_artefacts/Release/Chronomix",
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "chronomix: check dependencies",
+            "preLaunchTask": "cmake: build chronomix (release)",
             "env": {
                 "RUST_LOG": "info"
-            },
-            "linux": {
-                "env": {
-                    "PATH": "${env:HOME}/.cargo/bin:${env:PATH}",
-                    "RUST_LOG": "info"
-                }
             }
         },
         {
-            "name": "Run Chronomix (cargo run --release)",
+            "name": "Run Chronomix (JUCE + Rust Debug)",
             "type": "node-terminal",
             "request": "launch",
-            "command": "cargo run --release",
+            "command": "${workspaceFolder}/build-debug/chronomix_artefacts/Debug/Chronomix",
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "chronomix: check dependencies",
-            "env": {
-                "RUST_LOG": "info"
-            },
-            "linux": {
-                "env": {
-                    "PATH": "${env:HOME}/.cargo/bin:${env:PATH}",
-                    "RUST_LOG": "info"
-                }
-            }
-        },
-        {
-            "name": "Debug Chronomix (CodeLLDB)",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/target/debug/chronomix",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cargo: build chronomix (debug)",
+            "preLaunchTask": "cmake: build chronomix (debug)",
             "env": {
                 "RUST_LOG": "info"
             }
@@ -51,7 +27,7 @@
             "name": "Debug Chronomix (GDB)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/target/debug/chronomix",
+            "program": "${workspaceFolder}/build-debug/chronomix_artefacts/Debug/Chronomix",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -64,49 +40,7 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            "preLaunchTask": "cargo: build chronomix (debug)"
-        },
-        {
-            "name": "Run Chronomix (Release - CodeLLDB)",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/target/release/chronomix",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "cargo: build chronomix (release)",
-            "env": {
-                "RUST_LOG": "info"
-            }
-        },
-        {
-            "name": "Run Chronomix Windows (.exe via Wine)",
-            "type": "node-terminal",
-            "request": "launch",
-            "command": "wine \"${workspaceFolder}/target/x86_64-pc-windows-gnu/release/chronomix.exe\"",
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "chronomix: build windows (.exe)",
-            "env": {
-                "RUST_LOG": "info",
-                "WINEDEBUG": "-all"
-            }
-        },
-        {
-            "name": "Run Chronomix Windows Installer (.exe via Wine)",
-            "type": "node-terminal",
-            "request": "launch",
-            "command": "wine \"${workspaceFolder}/dist/Chronomix-Setup-Windows-x64.exe\"",
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "chronomix: build windows (.exe)",
-            "env": {
-                "WINEDEBUG": "-all"
-            }
+            "preLaunchTask": "cmake: build chronomix (debug)"
         }
     ]
 }

@@ -1,4 +1,6 @@
 /target/
+/build/
+/third_party/
 /dist/
 /chronomix-mix-*/
 *.wav

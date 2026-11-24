@@ -12,6 +12,8 @@ log.workspace = true
 pedal-audio = { path = "../pedal-audio" }
 pedal-wine = { path = "../pedal-wine" }
 rtrb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 vst3-host.workspace = true
 

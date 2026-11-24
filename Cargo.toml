@@ -4,9 +4,9 @@ members = [
     "crates/pedal-audio",
     "crates/pedal-engine",
     "crates/pedal-wine",
-    "crates/pedal-app",
+    "crates/chronomix-ffi",
 ]
-default-members = ["crates/pedal-app"]
+default-members = ["crates/chronomix-ffi"]
 
 [workspace.package]
 version = "0.0.1"
@@ -17,13 +17,10 @@ repository = "https://github.com/TheVixcho/chronomix"
 
 [workspace.dependencies]
 cpal = { version = "0.18.2", features = ["pipewire", "pulseaudio"] }
-eframe = "0.34"
-egui = "0.34"
 env_logger = "0.11"
 hound = "3.5.1"
 libloading = "0.8"
 log = "0.4"
-rfd = "0.17.0"
 rtrb = "0.3.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

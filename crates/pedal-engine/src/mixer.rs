@@ -28,6 +28,10 @@ use crate::{
     set_backend_param_live, set_backend_param_ui, slice_peak, store_peak,
     unload_backend_resources,
 };
+use crate::dj::{
+    DJ_HOT_CUES, DjAudioProcessor, DjCommand, DjDeckMeta, DjDeckParams, DjDeckTelemetry,
+    DjMixerParams, DjTelemetrySnapshot, SharedDjTelemetry, analyze_waveform_and_bpm,
+};
 
 pub const MAX_MIXER_CHANNELS: usize = 48;
 pub const MAX_MIXER_INSERTS: usize = 4;
@@ -72,6 +76,776 @@ impl ChannelIcon {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DspPreset {
+    PodcastPro,
+    RadioBroadcast,
+    StreamingDiscord,
+    VozCalida,
+    VozBrillante,
+    VozIntimaASMR,
+    VozDoblajeCine,
+    GuitarraAcustica,
+    GuitarraAcusticaBrillante,
+    GuitarraElectricaRock,
+    GuitarraElectricaLimpia,
+    BajoPunchSlap,
+    BajoVintageWarm,
+    BateriaKick808,
+    BateriaSnareCrisp,
+    BateriaOverheads,
+    PianoConcierto,
+    CuerdasSinfonicas,
+    EDMSynthLead,
+    LofiTelefono,
+    MegafonoPA,
+    MasteringPolished,
+    CleanFlat,
+}
+
+impl DspPreset {
+    pub fn presets() -> &'static [DspPreset] {
+        &[
+            DspPreset::PodcastPro,
+            DspPreset::RadioBroadcast,
+            DspPreset::StreamingDiscord,
+            DspPreset::VozCalida,
+            DspPreset::VozBrillante,
+            DspPreset::VozIntimaASMR,
+            DspPreset::VozDoblajeCine,
+            DspPreset::GuitarraAcustica,
+            DspPreset::GuitarraAcusticaBrillante,
+            DspPreset::GuitarraElectricaRock,
+            DspPreset::GuitarraElectricaLimpia,
+            DspPreset::BajoPunchSlap,
+            DspPreset::BajoVintageWarm,
+            DspPreset::BateriaKick808,
+            DspPreset::BateriaSnareCrisp,
+            DspPreset::BateriaOverheads,
+            DspPreset::PianoConcierto,
+            DspPreset::CuerdasSinfonicas,
+            DspPreset::EDMSynthLead,
+            DspPreset::LofiTelefono,
+            DspPreset::MegafonoPA,
+            DspPreset::MasteringPolished,
+            DspPreset::CleanFlat,
+        ]
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            DspPreset::PodcastPro => "Podcast Pro (Voz Broadcast)",
+            DspPreset::RadioBroadcast => "Voz Radial FM / DJ",
+            DspPreset::StreamingDiscord => "Streamer / Directos",
+            DspPreset::VozCalida => "Voz Cálida Studio",
+            DspPreset::VozBrillante => "Voz Brillante Pop",
+            DspPreset::VozIntimaASMR => "Voz Íntima / ASMR",
+            DspPreset::VozDoblajeCine => "Doblaje y Cine",
+            DspPreset::GuitarraAcustica => "Guitarra Acústica Natural",
+            DspPreset::GuitarraAcusticaBrillante => "Guitarra Fingerstyle",
+            DspPreset::GuitarraElectricaRock => "Guitarra Eléctrica Rock",
+            DspPreset::GuitarraElectricaLimpia => "Guitarra Clean Ambience",
+            DspPreset::BajoPunchSlap => "Bajo Punch & Slap",
+            DspPreset::BajoVintageWarm => "Bajo Cálido Tubo",
+            DspPreset::BateriaKick808 => "Bombo Punch 808",
+            DspPreset::BateriaSnareCrisp => "Caja Snare Crisp",
+            DspPreset::BateriaOverheads => "Platillos / Overheads",
+            DspPreset::PianoConcierto => "Piano de Cola Concierto",
+            DspPreset::CuerdasSinfonicas => "Cuerdas Sinfónicas",
+            DspPreset::EDMSynthLead => "Sintetizador Lead",
+            DspPreset::LofiTelefono => "Teléfono Vintage Lofi",
+            DspPreset::MegafonoPA => "Megáfono y Altavoz",
+            DspPreset::MasteringPolished => "Mastering Polish Glue",
+            DspPreset::CleanFlat => "Plano / Reset Total",
+        }
+    }
+
+    pub fn category(&self) -> &'static str {
+        match self {
+            DspPreset::PodcastPro
+            | DspPreset::RadioBroadcast
+            | DspPreset::StreamingDiscord
+            | DspPreset::VozCalida
+            | DspPreset::VozBrillante
+            | DspPreset::VozIntimaASMR
+            | DspPreset::VozDoblajeCine => "Voz & Podcasts",
+
+            DspPreset::GuitarraAcustica
+            | DspPreset::GuitarraAcusticaBrillante
+            | DspPreset::GuitarraElectricaRock
+            | DspPreset::GuitarraElectricaLimpia => "Guitarras & Cuerdas",
+
+            DspPreset::BajoPunchSlap | DspPreset::BajoVintageWarm => "Bajo",
+
+            DspPreset::BateriaKick808
+            | DspPreset::BateriaSnareCrisp
+            | DspPreset::BateriaOverheads => "Batería & Percusión",
+
+            DspPreset::PianoConcierto
+            | DspPreset::CuerdasSinfonicas
+            | DspPreset::EDMSynthLead => "Teclados & Orquesta",
+
+            DspPreset::LofiTelefono | DspPreset::MegafonoPA => "Efectos & Retro",
+
+            DspPreset::MasteringPolished | DspPreset::CleanFlat => "Mastering & Utilidad",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            DspPreset::PodcastPro => "Corte de graves a 80Hz, Noise Gate anti-ruido, calidez a 95Hz, corte a 340Hz, articulación a 3.2kHz, aire a 10.5kHz, compresor 3.5:1, De-Esser y saturación cálida.",
+            DspPreset::RadioBroadcast => "Sonido de radio comercial clásico: graves profundos a 115Hz, presencia enérgica a 3.8kHz, compresión agresiva 4.5:1, De-Esser y saturación analógica.",
+            DspPreset::StreamingDiscord => "Optimizado para directos, Twitch y Discord: Noise Gate para teclado/ratón, corte a 95Hz, claridad de habla a 2.8kHz y limitador.",
+            DspPreset::VozCalida => "Graves aterciopelados a 160Hz, compresión suave 2.2:1, De-Esser y reverb ambiental corta de sala.",
+            DspPreset::VozBrillante => "Voz moderna en primer plano: agudos a 13.5kHz, presencia a 4.2kHz, compresión rápida 3.8:1, delay estéreo y reverb hall brillante.",
+            DspPreset::VozIntimaASMR => "Sensibilidad extrema para susurros y foley íntimo: realce a 14kHz, compresión de alta ganancia (+6dB), imagen estéreo al 135%.",
+            DspPreset::VozDoblajeCine => "Voz limpia, dinámica y cinematográfica con saturación sutil de cinta, De-Esser y limitador de picos.",
+            DspPreset::GuitarraAcustica => "Corte a 70Hz, scoop de resonancia hueca a 360Hz, ataque a 3.4kHz, compresión sutil, reverb de madera y amplitud estéreo.",
+            DspPreset::GuitarraAcusticaBrillante => "Sonido de cuerdas metálicas brillantes para arpegios y fingerstyle: brillo a 12.5kHz, compresión suave y reverb.",
+            DspPreset::GuitarraElectricaRock => "Corte de zumbido a 85Hz, filtro pasa-bajos a 8.5kHz, medios a 2.8kHz, drive analógico 35%, delay y reverb.",
+            DspPreset::GuitarraElectricaLimpia => "Sonido limpio y cristalino: ecualización balanceada, compresión suave, delay estéreo largo y reverb espaciosa.",
+            DspPreset::BajoPunchSlap => "Pegada sub a 75Hz, scoop de cartón a 320Hz, chasquido de traste a 2.8kHz, compresión 4.5:1 con pegada y limitador de picos.",
+            DspPreset::BajoVintageWarm => "Graves redondos y cálidos a 90Hz, agudos recortados a 7.5kHz y saturación de amplificador a válvulas 28%.",
+            DspPreset::BateriaKick808 => "Sub-grave demoledor a 55Hz, corte a 340Hz, click de impacto a 3.2kHz, compresión rápida 5:1 y saturación.",
+            DspPreset::BateriaSnareCrisp => "Cuerpo a 210Hz, chasquido a 4.5kHz, Noise Gate para aislar platos, compresión 4:1 y reverb de caja.",
+            DspPreset::BateriaOverheads => "Paso-altos a 350Hz para eliminar bombo y toms, brillo sedoso a 14kHz, compresión transparente e imagen estéreo amplia (140%).",
+            DspPreset::PianoConcierto => "Cuerpo armónico del mueble a 100Hz, ataque del macillo a 2.5kHz, brillo de cuerda a 10.5kHz, compresión suave y reverb hall.",
+            DspPreset::CuerdasSinfonicas => "Calidez en violonchelos a 160Hz, suavizado de resina a 1.8kHz, aire a 12.5kHz, reverb sinfónica amplia e imagen estéreo al 135%.",
+            DspPreset::EDMSynthLead => "Lead incisivo con presencia a 3.2kHz, saturación al 30%, delay estéreo 180ms, reverb y amplitud estéreo al 145%.",
+            DspPreset::LofiTelefono => "Efecto clásico de bocina telefónica: HPF a 450Hz, LPF a 3800Hz, resonancia a 1.4kHz, compresión 6.5:1 y saturación al 48%.",
+            DspPreset::MegafonoPA => "Altavoz callejero / megafonía: banda estrecha 600Hz-3200Hz, pico a 1.8kHz, distorsión armónica al 62%, señal en mono.",
+            DspPreset::MasteringPolished => "Toque final para el bus máster o mezcla: curva Pultec suave (+1dB 60Hz, +1.6dB 12.5kHz), compresión glue transparente 1.5:1, calor de cinta y limitador a -0.2dB.",
+            DspPreset::CleanFlat => "Restablece todos los parámetros de EQ a 0 dB plano, desactiva filtros, dinámica y efectos, y devuelve la amplitud estéreo al 100%.",
+        }
+    }
+
+    pub fn suggested_icon(&self) -> ChannelIcon {
+        match self {
+            DspPreset::PodcastPro | DspPreset::RadioBroadcast | DspPreset::StreamingDiscord => {
+                ChannelIcon::Broadcast
+            }
+            DspPreset::VozCalida
+            | DspPreset::VozBrillante
+            | DspPreset::VozIntimaASMR
+            | DspPreset::VozDoblajeCine => ChannelIcon::Vocals,
+            DspPreset::GuitarraAcustica
+            | DspPreset::GuitarraAcusticaBrillante
+            | DspPreset::GuitarraElectricaRock
+            | DspPreset::GuitarraElectricaLimpia => ChannelIcon::Guitar,
+            DspPreset::BajoPunchSlap | DspPreset::BajoVintageWarm => ChannelIcon::Bass,
+            DspPreset::BateriaKick808
+            | DspPreset::BateriaSnareCrisp
+            | DspPreset::BateriaOverheads => ChannelIcon::Drums,
+            DspPreset::PianoConcierto | DspPreset::EDMSynthLead => ChannelIcon::Keys,
+            DspPreset::CuerdasSinfonicas => ChannelIcon::Strings,
+            DspPreset::LofiTelefono | DspPreset::MegafonoPA => ChannelIcon::Sfx,
+            DspPreset::MasteringPolished => ChannelIcon::Media,
+            DspPreset::CleanFlat => ChannelIcon::None,
+        }
+    }
+
+    pub fn apply(&self, dsp: &mut ChannelDspConfig) {
+        match self {
+            DspPreset::PodcastPro => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 80.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -48.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 95.0, gain_db: 1.8, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 340.0, gain_db: -2.5, q: 1.3 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3200.0, gain_db: 2.4, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 10500.0, gain_db: 1.8, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -18.0;
+                dsp.comp_ratio = 3.5;
+                dsp.comp_makeup_db = 3.0;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 6500.0;
+                dsp.deesser_threshold_db = -22.0;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.12;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.5;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::RadioBroadcast => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 75.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -42.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 115.0, gain_db: 3.8, q: 0.9 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 420.0, gain_db: -2.2, q: 1.4 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3800.0, gain_db: 3.5, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 11000.0, gain_db: 2.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -16.0;
+                dsp.comp_ratio = 4.5;
+                dsp.comp_makeup_db = 4.5;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 6200.0;
+                dsp.deesser_threshold_db = -24.0;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.22;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.2;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::StreamingDiscord => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 95.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -44.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 120.0, gain_db: 1.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 500.0, gain_db: -2.5, q: 1.5 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2800.0, gain_db: 3.2, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 9000.0, gain_db: 1.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -20.0;
+                dsp.comp_ratio = 3.2;
+                dsp.comp_makeup_db = 3.5;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 6800.0;
+                dsp.deesser_threshold_db = -20.0;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.8;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::VozCalida => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 85.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.gate_threshold_db = -58.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 160.0, gain_db: 2.2, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 650.0, gain_db: -1.5, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2400.0, gain_db: 1.2, q: 1.0 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 12000.0, gain_db: 2.8, q: 0.75 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -20.0;
+                dsp.comp_ratio = 2.2;
+                dsp.comp_makeup_db = 2.0;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 7000.0;
+                dsp.deesser_threshold_db = -22.0;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.45;
+                dsp.reverb_damp = 0.35;
+                dsp.reverb_mix = 0.16;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::VozBrillante => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 110.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -52.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 140.0, gain_db: -0.5, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 750.0, gain_db: -2.0, q: 1.4 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 4200.0, gain_db: 3.8, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 13500.0, gain_db: 4.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -15.0;
+                dsp.comp_ratio = 3.8;
+                dsp.comp_makeup_db = 3.8;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 6500.0;
+                dsp.deesser_threshold_db = -25.0;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = true;
+                dsp.delay_time_ms = 240.0;
+                dsp.delay_feedback = 0.22;
+                dsp.delay_mix = 0.14;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.65;
+                dsp.reverb_damp = 0.25;
+                dsp.reverb_mix = 0.20;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.5;
+                dsp.stereo_width = 1.15;
+            }
+            DspPreset::VozIntimaASMR => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 50.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -62.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 130.0, gain_db: 1.5, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 750.0, gain_db: -1.8, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 4000.0, gain_db: 3.2, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 14000.0, gain_db: 5.5, q: 0.7 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -26.0;
+                dsp.comp_ratio = 3.2;
+                dsp.comp_makeup_db = 6.0;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 7200.0;
+                dsp.deesser_threshold_db = -26.0;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.5;
+                dsp.stereo_width = 1.35;
+            }
+            DspPreset::VozDoblajeCine => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 75.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -46.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 110.0, gain_db: 2.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 380.0, gain_db: -2.0, q: 1.3 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3600.0, gain_db: 2.8, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 11500.0, gain_db: 2.2, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -17.0;
+                dsp.comp_ratio = 3.0;
+                dsp.comp_makeup_db = 3.0;
+                dsp.deesser_enabled = true;
+                dsp.deesser_freq_hz = 6400.0;
+                dsp.deesser_threshold_db = -23.0;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.08;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.3;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::GuitarraAcustica => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 70.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 120.0, gain_db: 1.5, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 360.0, gain_db: -3.2, q: 1.5 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3400.0, gain_db: 2.8, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 10500.0, gain_db: 3.0, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -16.0;
+                dsp.comp_ratio = 2.4;
+                dsp.comp_makeup_db = 2.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.52;
+                dsp.reverb_damp = 0.35;
+                dsp.reverb_mix = 0.18;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.25;
+            }
+            DspPreset::GuitarraAcusticaBrillante => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 90.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 100.0, gain_db: 0.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 320.0, gain_db: -3.8, q: 1.6 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 4800.0, gain_db: 3.5, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 12500.0, gain_db: 3.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -14.0;
+                dsp.comp_ratio = 2.5;
+                dsp.comp_makeup_db = 2.2;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.58;
+                dsp.reverb_damp = 0.25;
+                dsp.reverb_mix = 0.22;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.3;
+            }
+            DspPreset::GuitarraElectricaRock => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 85.0;
+                dsp.lpf_enabled = true;
+                dsp.lpf_freq_hz = 8500.0;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -50.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 150.0, gain_db: 2.2, q: 0.9 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 750.0, gain_db: 2.5, q: 1.3 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2800.0, gain_db: 2.2, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 6200.0, gain_db: -1.8, q: 1.0 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -14.0;
+                dsp.comp_ratio = 4.0;
+                dsp.comp_makeup_db = 2.5;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.35;
+                dsp.delay_enabled = true;
+                dsp.delay_time_ms = 320.0;
+                dsp.delay_feedback = 0.32;
+                dsp.delay_mix = 0.20;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.60;
+                dsp.reverb_damp = 0.40;
+                dsp.reverb_mix = 0.18;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::GuitarraElectricaLimpia => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 80.0;
+                dsp.lpf_enabled = true;
+                dsp.lpf_freq_hz = 12000.0;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 130.0, gain_db: 1.2, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 500.0, gain_db: -1.5, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2600.0, gain_db: 2.0, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 9500.0, gain_db: 2.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -16.0;
+                dsp.comp_ratio = 2.8;
+                dsp.comp_makeup_db = 2.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = true;
+                dsp.delay_time_ms = 380.0;
+                dsp.delay_feedback = 0.38;
+                dsp.delay_mix = 0.24;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.70;
+                dsp.reverb_damp = 0.30;
+                dsp.reverb_mix = 0.25;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.30;
+            }
+            DspPreset::BajoPunchSlap => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 35.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 75.0, gain_db: 3.5, q: 0.9 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 320.0, gain_db: -3.0, q: 1.5 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 1200.0, gain_db: 1.8, q: 1.3 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 2800.0, gain_db: 3.5, q: 1.2 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -18.0;
+                dsp.comp_ratio = 4.5;
+                dsp.comp_makeup_db = 3.5;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.18;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.5;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::BajoVintageWarm => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 40.0;
+                dsp.lpf_enabled = true;
+                dsp.lpf_freq_hz = 7500.0;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 90.0, gain_db: 3.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 450.0, gain_db: 1.5, q: 1.1 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 1500.0, gain_db: -1.5, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 4500.0, gain_db: -2.0, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -16.0;
+                dsp.comp_ratio = 3.5;
+                dsp.comp_makeup_db = 2.5;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.28;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::BateriaKick808 => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 28.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 55.0, gain_db: 4.5, q: 1.0 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 340.0, gain_db: -4.2, q: 1.6 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3200.0, gain_db: 3.5, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 8000.0, gain_db: 0.0, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -14.0;
+                dsp.comp_ratio = 5.0;
+                dsp.comp_makeup_db = 3.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.15;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.3;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::BateriaSnareCrisp => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 105.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = true;
+                dsp.gate_threshold_db = -46.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 210.0, gain_db: 3.2, q: 1.1 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 650.0, gain_db: -2.2, q: 1.4 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 4500.0, gain_db: 3.8, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 11000.0, gain_db: 2.2, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -15.0;
+                dsp.comp_ratio = 4.0;
+                dsp.comp_makeup_db = 3.2;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.42;
+                dsp.reverb_damp = 0.35;
+                dsp.reverb_mix = 0.16;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.0;
+            }
+            DspPreset::BateriaOverheads => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 350.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 450.0, gain_db: -2.0, q: 1.2 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 2500.0, gain_db: -1.5, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 7500.0, gain_db: 2.5, q: 1.0 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 14000.0, gain_db: 3.8, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -12.0;
+                dsp.comp_ratio = 2.2;
+                dsp.comp_makeup_db = 1.5;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.40;
+            }
+            DspPreset::PianoConcierto => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 45.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 100.0, gain_db: 1.2, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 420.0, gain_db: -1.6, q: 1.3 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2500.0, gain_db: 1.8, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 10500.0, gain_db: 2.4, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -16.0;
+                dsp.comp_ratio = 2.2;
+                dsp.comp_makeup_db = 1.5;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.65;
+                dsp.reverb_damp = 0.30;
+                dsp.reverb_mix = 0.24;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.25;
+            }
+            DspPreset::CuerdasSinfonicas => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 60.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 160.0, gain_db: 1.8, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 1800.0, gain_db: -1.5, q: 1.3 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 5500.0, gain_db: 1.6, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 12500.0, gain_db: 3.2, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -18.0;
+                dsp.comp_ratio = 2.0;
+                dsp.comp_makeup_db = 1.2;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.78;
+                dsp.reverb_damp = 0.28;
+                dsp.reverb_mix = 0.30;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.35;
+            }
+            DspPreset::EDMSynthLead => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 120.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 180.0, gain_db: 0.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 800.0, gain_db: -1.5, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3200.0, gain_db: 4.0, q: 1.2 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 11000.0, gain_db: 3.5, q: 0.8 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -13.0;
+                dsp.comp_ratio = 4.0;
+                dsp.comp_makeup_db = 3.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.30;
+                dsp.delay_enabled = true;
+                dsp.delay_time_ms = 180.0;
+                dsp.delay_feedback = 0.35;
+                dsp.delay_mix = 0.22;
+                dsp.reverb_enabled = true;
+                dsp.reverb_room_size = 0.65;
+                dsp.reverb_damp = 0.25;
+                dsp.reverb_mix = 0.22;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 1.45;
+            }
+            DspPreset::LofiTelefono => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 450.0;
+                dsp.lpf_enabled = true;
+                dsp.lpf_freq_hz = 3800.0;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 500.0, gain_db: 0.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 1400.0, gain_db: 5.5, q: 2.0 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2600.0, gain_db: 3.0, q: 1.5 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 3500.0, gain_db: -3.5, q: 1.2 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -10.0;
+                dsp.comp_ratio = 6.5;
+                dsp.comp_makeup_db = 4.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.48;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 0.7;
+            }
+            DspPreset::MegafonoPA => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 600.0;
+                dsp.lpf_enabled = true;
+                dsp.lpf_freq_hz = 3200.0;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 700.0, gain_db: 0.0, q: 0.8 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 1800.0, gain_db: 6.5, q: 2.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2400.0, gain_db: 4.0, q: 1.8 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 3000.0, gain_db: -4.0, q: 1.5 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -8.0;
+                dsp.comp_ratio = 8.0;
+                dsp.comp_makeup_db = 5.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.62;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = false;
+                dsp.stereo_width = 0.0;
+            }
+            DspPreset::MasteringPolished => {
+                dsp.hpf_enabled = true;
+                dsp.hpf_freq_hz = 26.0;
+                dsp.lpf_enabled = false;
+                dsp.gate_enabled = false;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 60.0, gain_db: 1.0, q: 0.7 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 380.0, gain_db: -0.8, q: 1.2 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 3600.0, gain_db: 0.8, q: 1.0 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 12500.0, gain_db: 1.6, q: 0.75 };
+                dsp.comp_enabled = true;
+                dsp.comp_threshold_db = -8.0;
+                dsp.comp_ratio = 1.5;
+                dsp.comp_makeup_db = 1.0;
+                dsp.deesser_enabled = false;
+                dsp.drive_enabled = true;
+                dsp.drive_amount = 0.08;
+                dsp.delay_enabled = false;
+                dsp.reverb_enabled = false;
+                dsp.limiter_enabled = true;
+                dsp.limiter_ceiling_db = -0.2;
+                dsp.stereo_width = 1.15;
+            }
+            DspPreset::CleanFlat => {
+                dsp.hpf_enabled = false;
+                dsp.hpf_freq_hz = 80.0;
+                dsp.lpf_enabled = false;
+                dsp.lpf_freq_hz = 16000.0;
+                dsp.gate_enabled = false;
+                dsp.gate_threshold_db = -48.0;
+                dsp.eq_enabled = true;
+                dsp.eq_bands[0] = EqBandConfig { enabled: true, freq_hz: 90.0, gain_db: 0.0, q: 0.75 };
+                dsp.eq_bands[1] = EqBandConfig { enabled: true, freq_hz: 420.0, gain_db: 0.0, q: 1.1 };
+                dsp.eq_bands[2] = EqBandConfig { enabled: true, freq_hz: 2400.0, gain_db: 0.0, q: 1.1 };
+                dsp.eq_bands[3] = EqBandConfig { enabled: true, freq_hz: 9500.0, gain_db: 0.0, q: 0.75 };
+                dsp.comp_enabled = false;
+                dsp.comp_threshold_db = -18.0;
+                dsp.comp_ratio = 3.0;
+                dsp.comp_makeup_db = 0.0;
+                dsp.deesser_enabled = false;
+                dsp.deesser_freq_hz = 6500.0;
+                dsp.deesser_threshold_db = -24.0;
+                dsp.drive_enabled = false;
+                dsp.drive_amount = 0.0;
+                dsp.delay_enabled = false;
+                dsp.delay_time_ms = 250.0;
+                dsp.delay_feedback = 0.35;
+                dsp.delay_mix = 0.25;
+                dsp.reverb_enabled = false;
+                dsp.reverb_room_size = 0.6;
+                dsp.reverb_damp = 0.3;
+                dsp.reverb_mix = 0.2;
+                dsp.limiter_enabled = false;
+                dsp.limiter_ceiling_db = -0.3;
+                dsp.stereo_width = 1.0;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelInputMode {
     Unassigned,
     Mono(usize),
@@ -96,7 +870,7 @@ impl Default for ChannelInputSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EqBandConfig {
     pub enabled: bool,
     pub freq_hz: f32,
@@ -104,7 +878,7 @@ pub struct EqBandConfig {
     pub q: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChannelDspConfig {
     pub trim_db: f32,
     pub balance: f32,
@@ -123,6 +897,21 @@ pub struct ChannelDspConfig {
     pub comp_threshold_db: f32,
     pub comp_ratio: f32,
     pub comp_makeup_db: f32,
+    pub deesser_enabled: bool,
+    pub deesser_freq_hz: f32,
+    pub deesser_threshold_db: f32,
+    pub drive_enabled: bool,
+    pub drive_amount: f32,
+    pub delay_enabled: bool,
+    pub delay_time_ms: f32,
+    pub delay_feedback: f32,
+    pub delay_mix: f32,
+    pub reverb_enabled: bool,
+    pub reverb_room_size: f32,
+    pub reverb_damp: f32,
+    pub reverb_mix: f32,
+    pub limiter_enabled: bool,
+    pub limiter_ceiling_db: f32,
     pub fx_bypass: bool,
     pub fader_db: f32,
     pub pan: f32,
@@ -179,6 +968,21 @@ impl Default for ChannelDspConfig {
             comp_threshold_db: -18.0,
             comp_ratio: 3.0,
             comp_makeup_db: 0.0,
+            deesser_enabled: false,
+            deesser_freq_hz: 6500.0,
+            deesser_threshold_db: -24.0,
+            drive_enabled: false,
+            drive_amount: 0.0,
+            delay_enabled: false,
+            delay_time_ms: 250.0,
+            delay_feedback: 0.35,
+            delay_mix: 0.25,
+            reverb_enabled: false,
+            reverb_room_size: 0.6,
+            reverb_damp: 0.3,
+            reverb_mix: 0.2,
+            limiter_enabled: false,
+            limiter_ceiling_db: -0.3,
             fx_bypass: false,
             fader_db: 0.0,
             pan: 0.0,
@@ -419,6 +1223,22 @@ impl BiquadCoeffs {
         }
     }
 
+    fn band_pass(freq_hz: f32, q: f32, sr: f32) -> Self {
+        let f = freq_hz.clamp(20.0, (sr * 0.45).max(40.0));
+        let w0 = 2.0 * PI * f / sr.max(1000.0);
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let alpha = sin_w0 / (2.0 * q.clamp(0.1, 10.0));
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: alpha / a0,
+            b1: 0.0,
+            b2: -alpha / a0,
+            a1: (-2.0 * cos_w0) / a0,
+            a2: (1.0 - alpha) / a0,
+        }
+    }
+
     fn magnitude_db(self, freq_hz: f32, sr: f32) -> f32 {
         let w = 2.0 * PI * freq_hz.clamp(10.0, sr * 0.49) / sr.max(1000.0);
         let cos1 = (-w).cos();
@@ -537,6 +1357,7 @@ impl Default for ChannelMeterAtomics {
 
 struct SharedMixerTelemetry {
     channels: [ChannelMeterAtomics; MAX_MIXER_CHANNELS],
+    dj: Arc<SharedDjTelemetry>,
     master_peak_l: AtomicU32,
     master_peak_r: AtomicU32,
     virtual_mic_peak_l: AtomicU32,
@@ -550,6 +1371,7 @@ impl Default for SharedMixerTelemetry {
     fn default() -> Self {
         Self {
             channels: std::array::from_fn(|_| ChannelMeterAtomics::default()),
+            dj: Arc::new(SharedDjTelemetry::default()),
             master_peak_l: AtomicU32::new(0),
             master_peak_r: AtomicU32::new(0),
             virtual_mic_peak_l: AtomicU32::new(0),
@@ -718,9 +1540,24 @@ struct RtChannelState {
     hpf_state: BiquadState,
     lpf_state: BiquadState,
     eq_states: [BiquadState; 4],
+    deesser_state: BiquadState,
+    deesser_env: f32,
     gate_env: f32,
     gate_gain: f32,
     comp_env: f32,
+    delay_buf_l: Vec<f32>,
+    delay_buf_r: Vec<f32>,
+    delay_pos: usize,
+    reverb_comb_l: [Vec<f32>; 4],
+    reverb_comb_r: [Vec<f32>; 4],
+    reverb_comb_pos_l: [usize; 4],
+    reverb_comb_pos_r: [usize; 4],
+    reverb_comb_filt_l: [f32; 4],
+    reverb_comb_filt_r: [f32; 4],
+    reverb_ap_l: [Vec<f32>; 2],
+    reverb_ap_r: [Vec<f32>; 2],
+    reverb_ap_pos_l: [usize; 2],
+    reverb_ap_pos_r: [usize; 2],
     inserts: [RtInsertSlot; MAX_MIXER_INSERTS],
     media: RtMediaSlot,
     preview: RtMediaSlot,
@@ -731,6 +1568,10 @@ struct RtChannelState {
 
 impl RtChannelState {
     fn new(max_frames: usize) -> Self {
+        const COMB_L: [usize; 4] = [1116, 1188, 1277, 1356];
+        const COMB_R: [usize; 4] = [1139, 1211, 1300, 1379];
+        const AP_L: [usize; 2] = [225, 556];
+        const AP_R: [usize; 2] = [248, 579];
         Self {
             feed_idx: None,
             mode: ChannelInputMode::Unassigned,
@@ -738,9 +1579,24 @@ impl RtChannelState {
             hpf_state: BiquadState::default(),
             lpf_state: BiquadState::default(),
             eq_states: [BiquadState::default(); 4],
+            deesser_state: BiquadState::default(),
+            deesser_env: 0.0,
             gate_env: 0.0,
             gate_gain: 1.0,
             comp_env: 0.0,
+            delay_buf_l: vec![0.0; 96000],
+            delay_buf_r: vec![0.0; 96000],
+            delay_pos: 0,
+            reverb_comb_l: std::array::from_fn(|i| vec![0.0; COMB_L[i]]),
+            reverb_comb_r: std::array::from_fn(|i| vec![0.0; COMB_R[i]]),
+            reverb_comb_pos_l: [0; 4],
+            reverb_comb_pos_r: [0; 4],
+            reverb_comb_filt_l: [0.0; 4],
+            reverb_comb_filt_r: [0.0; 4],
+            reverb_ap_l: std::array::from_fn(|i| vec![0.0; AP_L[i]]),
+            reverb_ap_r: std::array::from_fn(|i| vec![0.0; AP_R[i]]),
+            reverb_ap_pos_l: [0; 2],
+            reverb_ap_pos_r: [0; 2],
             inserts: std::array::from_fn(|_| RtInsertSlot::default()),
             media: RtMediaSlot::default(),
             preview: RtMediaSlot::default(),
@@ -823,6 +1679,7 @@ enum MixerCommand {
     SetRecorders(Option<Box<RecorderChannelTx>>),
     SetVirtualMicTx(Option<Producer<f32>>),
     SetVirtualMicGainDb(f32),
+    Dj(DjCommand),
 }
 
 struct MixerDspProcessor {
@@ -830,6 +1687,7 @@ struct MixerDspProcessor {
     cmd_rx: Consumer<MixerCommand>,
     active_channels: usize,
     channels: Vec<RtChannelState>,
+    dj: DjAudioProcessor,
     master_fader_db: f32,
     master_mute: bool,
     master_dim: bool,
@@ -854,11 +1712,13 @@ impl MixerDspProcessor {
         let channels = (0..MAX_MIXER_CHANNELS)
             .map(|_| RtChannelState::new(4096))
             .collect();
+        let dj = DjAudioProcessor::new(Arc::clone(&telemetry.dj));
         Self {
             telemetry,
             cmd_rx,
             active_channels: active_channels.clamp(1, MAX_MIXER_CHANNELS),
             channels,
+            dj,
             master_fader_db: 0.0,
             master_mute: false,
             master_dim: false,
@@ -1020,6 +1880,9 @@ impl MixerDspProcessor {
                 }
                 MixerCommand::SetVirtualMicGainDb(gain_db) => {
                     self.virtual_mic_gain_db = gain_db;
+                }
+                MixerCommand::Dj(dj_cmd) => {
+                    self.dj.handle_command(dj_cmd);
                 }
             }
         }
@@ -1209,6 +2072,22 @@ impl MixerAudioProcessor for MixerDspProcessor {
                     }
                 }
 
+                if ch.dsp.deesser_enabled {
+                    let bp_c = BiquadCoeffs::band_pass(ch.dsp.deesser_freq_hz, 1.8, sr);
+                    let (bp_l, bp_r) = ch.deesser_state.process_stereo(bp_c, l, r);
+                    let s_peak = bp_l.abs().max(bp_r.abs());
+                    let d_att = (-1.0 / (0.001 * sr)).exp();
+                    let d_rel = (-1.0 / (0.050 * sr)).exp();
+                    let d_c = if s_peak > ch.deesser_env { d_att } else { d_rel };
+                    ch.deesser_env = s_peak + d_c * (ch.deesser_env - s_peak);
+                    let d_thresh = db_to_linear(ch.dsp.deesser_threshold_db);
+                    if ch.deesser_env > d_thresh && d_thresh > 1e-6 {
+                        let gr = (d_thresh / ch.deesser_env).clamp(0.25, 1.0);
+                        l *= 1.0 - 0.75 * (1.0 - gr);
+                        r *= 1.0 - 0.75 * (1.0 - gr);
+                    }
+                }
+
                 if ch.dsp.comp_enabled {
                     let peak = l.abs().max(r.abs()).max(1e-7);
                     let env_c = if peak > ch.comp_env { comp_att } else { comp_rel };
@@ -1220,6 +2099,25 @@ impl MixerAudioProcessor for MixerDspProcessor {
                     let comp_gain = db_to_linear(-gr_db) * comp_makeup;
                     l *= comp_gain;
                     r *= comp_gain;
+                }
+
+                if ch.dsp.drive_enabled && ch.dsp.drive_amount > 0.001 {
+                    let drive = ch.dsp.drive_amount.clamp(0.0, 1.0);
+                    let boost = 1.0 + drive * 2.8;
+                    let norm = 1.0 / (1.0 + drive * 1.4);
+                    let sat_fn = |v: f32| -> f32 {
+                        let x = (v * boost).clamp(-3.0, 3.0);
+                        let s = if x > 1.0 {
+                            1.0 - (-x + 1.0).exp()
+                        } else if x < -1.0 {
+                            -1.0 + (x + 1.0).exp()
+                        } else {
+                            x - (x * x * x) * (1.0 / 6.0)
+                        };
+                        s * norm
+                    };
+                    l = sat_fn(l);
+                    r = sat_fn(r);
                 }
 
                 ch.buf_l[i] = l;
@@ -1244,6 +2142,89 @@ impl MixerAudioProcessor for MixerDspProcessor {
                             );
                         }
                     }
+                }
+            }
+
+            if ch.dsp.delay_enabled && ch.dsp.delay_mix > 0.001 {
+                let d_len = ch.delay_buf_l.len();
+                let delay_samples = ((ch.dsp.delay_time_ms.clamp(20.0, 1500.0) * 0.001 * sr) as usize).clamp(1, d_len - 1);
+                let fb = ch.dsp.delay_feedback.clamp(0.0, 0.85);
+                let mix = ch.dsp.delay_mix.clamp(0.0, 1.0);
+                for i in 0..frames {
+                    let l = ch.buf_l[i];
+                    let r = ch.buf_r[i];
+                    let rpos = (ch.delay_pos + d_len - delay_samples) % d_len;
+                    let del_l = ch.delay_buf_l[rpos];
+                    let del_r = ch.delay_buf_r[rpos];
+                    ch.delay_buf_l[ch.delay_pos] = l + del_l * fb;
+                    ch.delay_buf_r[ch.delay_pos] = r + del_r * fb;
+                    ch.delay_pos = (ch.delay_pos + 1) % d_len;
+                    ch.buf_l[i] = (1.0 - mix) * l + mix * del_l;
+                    ch.buf_r[i] = (1.0 - mix) * r + mix * del_r;
+                }
+            }
+
+            if ch.dsp.reverb_enabled && ch.dsp.reverb_mix > 0.001 {
+                let room = ch.dsp.reverb_room_size.clamp(0.05, 0.95);
+                let damp = ch.dsp.reverb_damp.clamp(0.0, 0.85);
+                let mix = ch.dsp.reverb_mix.clamp(0.0, 1.0);
+                for i in 0..frames {
+                    let in_l = ch.buf_l[i];
+                    let in_r = ch.buf_r[i];
+                    let mut wet_l = 0.0_f32;
+                    let mut wet_r = 0.0_f32;
+                    for c_idx in 0..4 {
+                        let c_buf_l = &mut ch.reverb_comb_l[c_idx];
+                        let c_pos_l = ch.reverb_comb_pos_l[c_idx];
+                        let out_l = c_buf_l[c_pos_l];
+                        ch.reverb_comb_filt_l[c_idx] = out_l * (1.0 - damp) + ch.reverb_comb_filt_l[c_idx] * damp;
+                        c_buf_l[c_pos_l] = in_l + ch.reverb_comb_filt_l[c_idx] * room;
+                        ch.reverb_comb_pos_l[c_idx] = (c_pos_l + 1) % c_buf_l.len();
+                        wet_l += out_l;
+
+                        let c_buf_r = &mut ch.reverb_comb_r[c_idx];
+                        let c_pos_r = ch.reverb_comb_pos_r[c_idx];
+                        let out_r = c_buf_r[c_pos_r];
+                        ch.reverb_comb_filt_r[c_idx] = out_r * (1.0 - damp) + ch.reverb_comb_filt_r[c_idx] * damp;
+                        c_buf_r[c_pos_r] = in_r + ch.reverb_comb_filt_r[c_idx] * room;
+                        ch.reverb_comb_pos_r[c_idx] = (c_pos_r + 1) % c_buf_r.len();
+                        wet_r += out_r;
+                    }
+                    wet_l *= 0.25;
+                    wet_r *= 0.25;
+                    for ap_idx in 0..2 {
+                        let ap_buf_l = &mut ch.reverb_ap_l[ap_idx];
+                        let ap_pos_l = ch.reverb_ap_pos_l[ap_idx];
+                        let b_out_l = ap_buf_l[ap_pos_l];
+                        ap_buf_l[ap_pos_l] = wet_l + b_out_l * 0.5;
+                        wet_l = -wet_l + b_out_l;
+                        ch.reverb_ap_pos_l[ap_idx] = (ap_pos_l + 1) % ap_buf_l.len();
+
+                        let ap_buf_r = &mut ch.reverb_ap_r[ap_idx];
+                        let ap_pos_r = ch.reverb_ap_pos_r[ap_idx];
+                        let b_out_r = ap_buf_r[ap_pos_r];
+                        ap_buf_r[ap_pos_r] = wet_r + b_out_r * 0.5;
+                        wet_r = -wet_r + b_out_r;
+                        ch.reverb_ap_pos_r[ap_idx] = (ap_pos_r + 1) % ap_buf_r.len();
+                    }
+                    ch.buf_l[i] = (1.0 - mix) * in_l + mix * wet_l;
+                    ch.buf_r[i] = (1.0 - mix) * in_r + mix * wet_r;
+                }
+            }
+
+            if ch.dsp.limiter_enabled {
+                let ceil = db_to_linear(ch.dsp.limiter_ceiling_db.clamp(-6.0, 0.0));
+                for i in 0..frames {
+                    let mut l = ch.buf_l[i];
+                    let mut r = ch.buf_r[i];
+                    let peak = l.abs().max(r.abs());
+                    if peak > ceil && peak > 1e-6 {
+                        let att = ceil / peak;
+                        l *= att;
+                        r *= att;
+                    }
+                    ch.buf_l[i] = l;
+                    ch.buf_r[i] = r;
                 }
             }
 
@@ -1294,6 +2275,15 @@ impl MixerAudioProcessor for MixerDspProcessor {
             store_peak(&m_atomics.out_peak_l, post_peak_l);
             store_peak(&m_atomics.out_peak_r, post_peak_r);
         }
+
+        self.dj.process_and_mix(
+            out_left,
+            out_right,
+            &mut self.vmic_l,
+            &mut self.vmic_r,
+            frames,
+            sample_rate,
+        );
 
         for slot in &self.master_inserts {
             if !slot.bypass {
@@ -1423,6 +2413,9 @@ pub struct MixerEngine {
     sample_rate: u32,
     block_size: usize,
     wine_config: WineConfig,
+    dj_decks: [DjDeckMeta; 2],
+    dj_buffers: [Option<Arc<MediaBuffer>>; 2],
+    dj_mixer: DjMixerParams,
 }
 
 impl Default for MixerEngine {
@@ -1458,6 +2451,9 @@ impl MixerEngine {
             sample_rate: 48_000,
             block_size: 256,
             wine_config: WineConfig::default(),
+            dj_decks: [DjDeckMeta::default(), DjDeckMeta::default()],
+            dj_buffers: [None, None],
+            dj_mixer: DjMixerParams::default(),
         }
     }
 
@@ -1654,6 +2650,19 @@ impl MixerEngine {
     pub fn set_channel_dsp(&mut self, ch: usize, dsp: ChannelDspConfig) {
         if let Some(c) = self.channels.get_mut(ch) {
             c.dsp = dsp;
+            if let Some(ref mut tx) = self.cmd_tx {
+                let _ = tx.push(MixerCommand::SetChannelDsp { ch, dsp });
+            }
+        }
+    }
+
+    pub fn apply_channel_preset(&mut self, ch: usize, preset: DspPreset) {
+        if let Some(c) = self.channels.get_mut(ch) {
+            preset.apply(&mut c.dsp);
+            if c.icon == ChannelIcon::None {
+                c.icon = preset.suggested_icon();
+            }
+            let dsp = c.dsp;
             if let Some(ref mut tx) = self.cmd_tx {
                 let _ = tx.push(MixerCommand::SetChannelDsp { ch, dsp });
             }
@@ -2244,6 +3253,33 @@ impl MixerEngine {
                         bypass: slot.bypass,
                         mix: slot.mix,
                     });
+                }
+            }
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetMixerParams(self.dj_mixer)));
+            for deck_idx in 0..2 {
+                if let Some(ref buf) = self.dj_buffers[deck_idx] {
+                    let meta = &self.dj_decks[deck_idx];
+                    let _ = tx.push(MixerCommand::Dj(DjCommand::LoadTrack {
+                        deck: deck_idx,
+                        buffer: Arc::clone(buf),
+                        base_bpm: meta.base_bpm,
+                    }));
+                    let _ = tx.push(MixerCommand::Dj(DjCommand::SetDeckParams {
+                        deck: deck_idx,
+                        params: meta.params,
+                    }));
+                    let _ = tx.push(MixerCommand::Dj(DjCommand::SetLoopRegion {
+                        deck: deck_idx,
+                        enabled: meta.params.loop_enabled,
+                        start_frame: meta.loop_start_frame,
+                        end_frame: meta.loop_end_frame,
+                    }));
+                    if meta.playing {
+                        let _ = tx.push(MixerCommand::Dj(DjCommand::SetPlaying {
+                            deck: deck_idx,
+                            playing: true,
+                        }));
+                    }
                 }
             }
         }
@@ -2842,6 +3878,241 @@ impl MixerEngine {
             is_recording: self.telemetry.recording_active.load(Ordering::Relaxed),
         }
     }
+
+    pub fn dj_deck_meta(&self, deck: usize) -> Option<&DjDeckMeta> {
+        self.dj_decks.get(deck)
+    }
+
+    pub fn dj_mixer_params(&self) -> DjMixerParams {
+        self.dj_mixer
+    }
+
+    pub fn dj_load_buffer(&mut self, deck: usize, buffer: MediaBuffer, path: Option<PathBuf>) {
+        if deck >= 2 {
+            return;
+        }
+        let (waveform, base_bpm) = analyze_waveform_and_bpm(&buffer);
+        let arc_buf = Arc::new(buffer);
+        if let Some(old) = self.dj_buffers[deck].replace(Arc::clone(&arc_buf)) {
+            self.retired_media_buffers.push(old);
+        }
+        let meta = &mut self.dj_decks[deck];
+        meta.path = path;
+        meta.title = arc_buf.title.clone();
+        meta.sample_rate = arc_buf.sample_rate;
+        meta.total_frames = arc_buf.total_frames;
+        meta.base_bpm = base_bpm;
+        meta.cue_frame = 0.0;
+        meta.hot_cues = [None; DJ_HOT_CUES];
+        meta.loop_start_frame = 0.0;
+        meta.loop_end_frame = 0.0;
+        meta.waveform = waveform;
+        meta.params.tempo_percent = 0.0;
+        meta.params.loop_enabled = false;
+        meta.playing = false;
+
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::LoadTrack {
+                deck,
+                buffer: arc_buf,
+                base_bpm,
+            }));
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetDeckParams {
+                deck,
+                params: meta.params,
+            }));
+        }
+    }
+
+    pub fn dj_load_file(&mut self, deck: usize, path: PathBuf) -> Result<(), EngineError> {
+        if deck >= 2 {
+            return Ok(());
+        }
+        let sr = self.sample_rate();
+        let buffer = decode_audio_file(&path, sr)?;
+        self.dj_load_buffer(deck, buffer, Some(path));
+        Ok(())
+    }
+
+    pub fn dj_unload(&mut self, deck: usize) {
+        if deck >= 2 {
+            return;
+        }
+        if let Some(old) = self.dj_buffers[deck].take() {
+            self.retired_media_buffers.push(old);
+        }
+        self.dj_decks[deck] = DjDeckMeta::default();
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::UnloadTrack { deck }));
+        }
+    }
+
+    pub fn dj_set_playing(&mut self, deck: usize, playing: bool) {
+        if deck >= 2 || self.dj_buffers[deck].is_none() {
+            return;
+        }
+        self.dj_decks[deck].playing = playing;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetPlaying { deck, playing }));
+        }
+    }
+
+    pub fn dj_seek_norm(&mut self, deck: usize, norm: f64) {
+        if deck >= 2 || self.dj_decks[deck].total_frames == 0 {
+            return;
+        }
+        let frame = norm.clamp(0.0, 1.0) * (self.dj_decks[deck].total_frames.saturating_sub(1)) as f64;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SeekFrame { deck, frame }));
+        }
+    }
+
+    pub fn dj_nudge_secs(&mut self, deck: usize, delta_secs: f64) {
+        if deck >= 2 || self.dj_decks[deck].total_frames == 0 {
+            return;
+        }
+        let delta_frames = delta_secs * self.dj_decks[deck].sample_rate.max(8000) as f64;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::NudgeFrames { deck, delta_frames }));
+        }
+    }
+
+    pub fn dj_set_cue_here(&mut self, deck: usize) {
+        if deck >= 2 {
+            return;
+        }
+        let pos = self.telemetry.dj.decks[deck].pos_frames.load(Ordering::Relaxed) as f64;
+        self.dj_decks[deck].cue_frame = pos;
+    }
+
+    pub fn dj_jump_cue(&mut self, deck: usize, start_playing: bool) {
+        if deck >= 2 || self.dj_buffers[deck].is_none() {
+            return;
+        }
+        let frame = self.dj_decks[deck].cue_frame;
+        self.dj_decks[deck].playing = start_playing;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SeekFrame { deck, frame }));
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetPlaying {
+                deck,
+                playing: start_playing,
+            }));
+        }
+    }
+
+    pub fn dj_hot_cue(&mut self, deck: usize, slot: usize, clear: bool) {
+        if deck >= 2 || slot >= DJ_HOT_CUES || self.dj_buffers[deck].is_none() {
+            return;
+        }
+        if clear {
+            self.dj_decks[deck].hot_cues[slot] = None;
+            return;
+        }
+        if let Some(frame) = self.dj_decks[deck].hot_cues[slot] {
+            self.dj_decks[deck].playing = true;
+            if let Some(ref mut tx) = self.cmd_tx {
+                let _ = tx.push(MixerCommand::Dj(DjCommand::SeekFrame { deck, frame }));
+                let _ = tx.push(MixerCommand::Dj(DjCommand::SetPlaying { deck, playing: true }));
+            }
+        } else {
+            let pos = self.telemetry.dj.decks[deck].pos_frames.load(Ordering::Relaxed) as f64;
+            self.dj_decks[deck].hot_cues[slot] = Some(pos);
+        }
+    }
+
+    pub fn dj_sync_bpm(&mut self, deck: usize) {
+        if deck >= 2 {
+            return;
+        }
+        let other = 1 - deck;
+        let target_bpm = self.dj_decks[other].effective_bpm();
+        let base = self.dj_decks[deck].base_bpm.max(30.0);
+        let pct = ((target_bpm / base) - 1.0) * 100.0;
+        self.dj_decks[deck].params.tempo_percent = pct.clamp(-50.0, 50.0);
+        let params = self.dj_decks[deck].params;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetDeckParams { deck, params }));
+        }
+    }
+
+    pub fn dj_set_loop(&mut self, deck: usize, enabled: bool, beats: f32) {
+        if deck >= 2 || self.dj_decks[deck].total_frames == 0 {
+            return;
+        }
+        let beats = beats.clamp(0.25, 32.0);
+        self.dj_decks[deck].params.loop_beats = beats;
+        self.dj_decks[deck].params.loop_enabled = enabled;
+        let sr = self.dj_decks[deck].sample_rate.max(8000) as f64;
+        let bpm = self.dj_decks[deck].base_bpm.max(40.0) as f64;
+        let frames_per_beat = (60.0 / bpm) * sr;
+        let start = self.telemetry.dj.decks[deck].pos_frames.load(Ordering::Relaxed) as f64;
+        let end = (start + frames_per_beat * beats as f64)
+            .min(self.dj_decks[deck].total_frames as f64);
+        self.dj_decks[deck].loop_start_frame = start;
+        self.dj_decks[deck].loop_end_frame = end;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetLoopRegion {
+                deck,
+                enabled,
+                start_frame: start,
+                end_frame: end,
+            }));
+        }
+    }
+
+    pub fn dj_set_deck_params(&mut self, deck: usize, params: DjDeckParams) {
+        if deck >= 2 {
+            return;
+        }
+        self.dj_decks[deck].params = params;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetDeckParams { deck, params }));
+        }
+    }
+
+    pub fn dj_set_mixer_params(&mut self, params: DjMixerParams) {
+        self.dj_mixer = params;
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::SetMixerParams(params)));
+        }
+    }
+
+    pub fn dj_start_auto_crossfade(&mut self, target: f32, duration_secs: f32) {
+        if let Some(ref mut tx) = self.cmd_tx {
+            let _ = tx.push(MixerCommand::Dj(DjCommand::StartAutoCrossfade {
+                target,
+                duration_secs,
+            }));
+        }
+    }
+
+    pub fn dj_take_telemetry(&mut self) -> DjTelemetrySnapshot {
+        let mut decks = [DjDeckTelemetry::default(); 2];
+        for i in 0..2 {
+            let td = &self.telemetry.dj.decks[i];
+            let pos = td.pos_frames.load(Ordering::Relaxed);
+            let playing = td.playing.load(Ordering::Relaxed);
+            if self.session.is_some() {
+                self.dj_decks[i].playing = playing;
+            }
+            decks[i] = DjDeckTelemetry {
+                pos_frames: pos,
+                playing,
+                peak_l: f32::from_bits(td.peak_l.swap(0, Ordering::Relaxed)),
+                peak_r: f32::from_bits(td.peak_r.swap(0, Ordering::Relaxed)),
+            };
+        }
+        let xf = f32::from_bits(self.telemetry.dj.crossfader.load(Ordering::Relaxed));
+        if self.session.is_some() {
+            self.dj_mixer.crossfader = xf;
+        }
+        DjTelemetrySnapshot {
+            decks,
+            master_peak_l: f32::from_bits(self.telemetry.dj.master_peak_l.swap(0, Ordering::Relaxed)),
+            master_peak_r: f32::from_bits(self.telemetry.dj.master_peak_r.swap(0, Ordering::Relaxed)),
+            crossfader: xf,
+        }
+    }
 }
 
 fn load_pactl_module(args: &[&str]) -> Result<u32, EngineError> {
@@ -3346,5 +4617,56 @@ mod tests {
         assert_eq!(engine.channel(m1).unwrap().media.current_frame, 0);
         assert_eq!(engine.channel(m2).unwrap().media.current_frame, 0);
         assert!(!engine.is_any_media_playing());
+    }
+
+    #[test]
+    fn test_all_dsp_presets_apply_without_panics() {
+        let mut dsp = ChannelDspConfig::default();
+        for preset in DspPreset::presets() {
+            assert!(!preset.name().is_empty());
+            assert!(!preset.category().is_empty());
+            assert!(!preset.description().is_empty());
+            preset.apply(&mut dsp);
+            assert!(dsp.eq_enabled);
+        }
+    }
+
+    #[test]
+    fn test_podcast_preset_applies_and_processes_cleanly() {
+        let mut engine = MixerEngine::new();
+        engine.apply_channel_preset(0, DspPreset::PodcastPro);
+        let ch = engine.channel(0).unwrap();
+        assert!(ch.dsp.hpf_enabled);
+        assert_eq!(ch.dsp.hpf_freq_hz, 80.0);
+        assert!(ch.dsp.gate_enabled);
+        assert_eq!(ch.dsp.gate_threshold_db, -48.0);
+        assert!(ch.dsp.comp_enabled);
+        assert_eq!(ch.dsp.comp_ratio, 3.5);
+        assert!(ch.dsp.deesser_enabled);
+        assert_eq!(ch.dsp.deesser_freq_hz, 6500.0);
+        assert!(ch.dsp.drive_enabled);
+        assert_eq!(ch.dsp.drive_amount, 0.12);
+        assert!(ch.dsp.limiter_enabled);
+        assert_eq!(ch.icon, ChannelIcon::Broadcast);
+
+        let telemetry = Arc::new(SharedMixerTelemetry::default());
+        let (mut tx, rx) = RingBuffer::<MixerCommand>::new(64);
+        let mut proc = MixerDspProcessor::new(Arc::clone(&telemetry), rx, 1, 48_000.0);
+        let _ = tx.push(MixerCommand::SetChannelRouting {
+            ch: 0,
+            feed_idx: Some(0),
+            mode: ChannelInputMode::Mono(0),
+        });
+        let _ = tx.push(MixerCommand::SetChannelDsp {
+            ch: 0,
+            dsp: ch.dsp,
+        });
+
+        let feed = [0.1_f32; 128];
+        let mut out_l = [0.0_f32; 128];
+        let mut out_r = [0.0_f32; 128];
+        proc.process(&[&feed], &[1], &mut out_l, &mut out_r, 128, 48_000.0);
+        assert!(out_l[0].is_finite());
+        assert!(out_r[0].is_finite());
     }
 }

@@ -1,5 +1,11 @@
+pub mod dj;
+pub use dj::*;
+pub mod midi;
+pub use midi::*;
 pub mod mixer;
 pub use mixer::*;
+pub mod paths;
+pub use paths::*;
 pub mod vst2;
 
 use std::{
@@ -24,10 +30,11 @@ use pedal_wine::{
 };
 pub use pedal_wine::{
     WineAction, WineBridgeMode, WineConfig, WineEnvironmentStatus, WinePrefixInfo, WinePrefixKind,
-    WineRunnerInfo, default_chronomix_wine_prefix, detect_display_env, discover_wine_binaries,
-    discover_wine_prefixes, initialize_wine_prefix, inspect_wine_environment,
-    launch_wine_executable, launch_wine_tool, rebuild_wine_bridge, resolve_wine_binary,
-    resolve_wine_prefix, standard_prefix_vst_dirs,
+    WineRunnerInfo, current_bridge_mode, default_chronomix_wine_prefix, detect_display_env,
+    discover_wine_binaries, discover_wine_prefixes, initialize_wine_prefix,
+    inspect_wine_environment, launch_wine_executable, launch_wine_tool, rebuild_wine_bridge,
+    resolve_wine_binary, resolve_wine_prefix, standard_prefix_vst_dirs,
+    wine_bridge_runtime_warning,
 };
 use rtrb::{Consumer, Producer, RingBuffer};
 use thiserror::Error;
@@ -539,21 +546,7 @@ impl PedalEngine {
     /// Returns the default program VST folder (`<workspace_or_exe_dir>/vst_plugins`),
     /// creating it if it does not exist yet.
     pub fn default_program_vst_dir() -> PathBuf {
-        let candidates = [
-            std::env::current_dir().ok().map(|d| d.join("vst_plugins")),
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("vst_plugins"))),
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".local/share/chronomix/vst_plugins")),
-        ];
-        for cand in candidates.into_iter().flatten() {
-            if std::fs::create_dir_all(&cand).is_ok() {
-                return cand.canonicalize().unwrap_or(cand);
-            }
-        }
-        PathBuf::from("vst_plugins")
+        AppPaths::resolve().vst_plugins_dir()
     }
 
     /// Scan a specific VST folder (program folder or custom user folder) for VST2 & VST3 plugins.
@@ -877,6 +870,11 @@ pub(crate) fn load_plugin_backend(
 
     if let Some(target) = pedal_wine::resolve_vst3_target(requested_path) {
         #[cfg(target_os = "linux")]
+        let is_windows_dll = target
+            .binary_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("dll"));
         match target.kind {
             Vst3BinaryKind::WindowsPe64 => {
                 return load_wine_backend(&target.bundle_or_file, &target.binary_path, sr, block, wine_config);
@@ -885,6 +883,11 @@ pub(crate) fn load_plugin_backend(
                 return Err(EngineError::Wine(WineError::UnsupportedArch32(
                     target.bundle_or_file.display().to_string(),
                 )));
+            }
+            Vst3BinaryKind::Unknown if is_windows_dll => {
+                if wine_bridge_runtime_warning(wine_config).is_some() {
+                    return Err(EngineError::Wine(WineError::BridgeNotBuilt));
+                }
             }
             Vst3BinaryKind::NativeElf | Vst3BinaryKind::Unknown => {}
         }
@@ -1003,6 +1006,9 @@ fn load_wine_backend(
     block: usize,
     wine_config: &WineConfig,
 ) -> Result<(LoadedBackend, LoadedPluginMeta, ActivePluginHandle), EngineError> {
+    if wine_bridge_runtime_warning(wine_config).is_some() {
+        return Err(EngineError::Wine(WineError::BridgeNotBuilt));
+    }
     let wine_plugin = WineVst3Plugin::load_with_config(dll_path, sr, block, wine_config)?;
     let wmeta = wine_plugin.metadata();
     let fallback_name = requested_path

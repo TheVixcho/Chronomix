@@ -1,61 +1,112 @@
-# Chronomix — Studio Audio DAW & Digital Mixer (`v0.0.1`)
+# Chronomix — Studio Audio DAW, Digital Mixer & Dual-Deck DJ (`v0.0.1`)
 
 **Creado por [TheVixcho](https://github.com/TheVixcho)** · **Licencia [MIT](LICENSE)**
 
-**Chronomix** es una estación de trabajo de audio digital (**DAW**), consola de mezcla digital profesional inspirada en **Behringer X32 / Wing** y host nativo **VST2 / VST3** multiplataforma escrito en Rust (`eframe`/`egui` + `cpal` + `vst3-host` + `libloading`), con puente integrado para plugins de Windows (64 bits `.dll` / `.vst3`) sobre Linux mediante Wine.
+**Chronomix** es una estación de trabajo de audio digital (**DAW**), consola de mezcla profesional, estudio **MIDI**, mezclador **DJ de doble bandeja** y host nativo **VST2 / VST3** multiplataforma construido con una arquitectura híbrida **JUCE (C++20) + Rust** (`chronomix-ffi` + `pedal-engine` + `pedal-audio` + `pedal-wine`), con soporte para plugins nativos y puente Wine para plugins Windows de 64 bits (`.dll` / `.vst3`) en Linux.
 
 ---
 
 ## Instalación Rápida
 
-### Windows (Instalador Oficial `.exe` x64 y ARM64)
-1. Descarga **`Chronomix-Setup-Windows-x64.exe`** (PCs Intel/AMD) o **`Chronomix-Setup-Windows-ARM64.exe`** (Windows en ARM / Snapdragon) desde la sección de [Releases](https://github.com/TheVixcho/chronomix/releases/latest).
-2. Ejecuta el instalador, acepta la licencia **MIT (TheVixcho)** y confirma crear el **acceso directo en el Escritorio y Menú Inicio**.
-3. Abre **Chronomix** desde tu Escritorio o Menú Inicio.
-
-### Linux x86_64 y ARM64 (Instalación en 1 Comando)
-Pega este comando en tu terminal para descargar automáticamente el paquete correspondiente a tu arquitectura (`Chronomix-Linux-x86_64.tar.gz` o `Chronomix-Linux-ARM64.tar.gz`), instalar el binario y crear el acceso directo en tu Escritorio y menú de aplicaciones:
+### Linux x86_64 / ARM64 y macOS (Instalación en 1 Comando)
+El instalador resuelve automáticamente la publicación más reciente a través de la API de GitHub Releases (incluyendo pre-releases) y verifica dependencias con mensajes claros si necesita compilar desde el código fuente:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
 ```
 
-### macOS Apple Silicon / Intel (Instalación en 1 Comando o `.dmg`)
-Con un solo comando en la terminal:
+### Windows
+Compila nativamente con CMake + Rust (`MSVC`) usando:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/TheVixcho/chronomix/main/install.sh | bash
+```powershell
+.\installer\build-windows.ps1
 ```
 
-O descarga **`Chronomix-macOS.dmg`** desde [Releases](https://github.com/TheVixcho/chronomix/releases/latest) y arrastra `Chronomix.app` a tu carpeta `Applications`.
+O descarga los paquetes publicados en [Releases](https://github.com/TheVixcho/chronomix/releases).
+
+---
+
+## Almacenamiento Estándar del Sistema (XDG / AppData)
+
+Chronomix no ensucia tu directorio de trabajo ni `$HOME`:
+
+- **Linux (XDG)**:
+  - Ajustes y estado de ventana validado: `~/.config/chronomix/` (`settings.json`, `window.json`)
+  - Plugins VST: `~/.local/share/chronomix/vst_plugins/`
+  - Grabaciones multipista: `~/.local/share/chronomix/recordings/`
+  - Perfiles DSP JSON: `~/.local/share/chronomix/profiles/`
+- **macOS**: `~/Library/Application Support/Chronomix/`
+- **Windows**: `%APPDATA%\Chronomix\`
 
 ---
 
 ## Características Principales (`v0.0.1`)
 
-- **Consola Digital Profesional (Estilo Behringer Wing / X32)**:
-  - Interfaz en escala de grises y negro de alto contraste con botones táctiles biselados efecto vidrio/goma y faders motorizados.
-  - Bancos de canales dedicados a la izquierda: `CH 1-16`, `CH 17-32`, `CH 33-48` y `MULTIMEDIA`, con scroll horizontal fluido.
-  - Pantalla superior de consola con altura fija proporcional (`HOME`, `FUENTE`, `EQ`, `DINÁMICA`, `RACK VST`, `SALIDA / REC`, `AJUSTES`, `NOVEDADES`).
-- **Canales Personalizables y Multimedia**:
-  - Por defecto inicia con 2 canales listos para usar; permite agregar hasta 48 canales.
-  - Iconos predeterminados por instrumento (Voz, Guitarra, Bajo, Batería, Teclado, Podcast, Multimedia) o importación de imagen personalizada.
-  - Selector de color por canal desde la pestaña `FUENTE` (negro por defecto).
-  - Controles de reproducción Multimedia (`Play/Pause`, `Stop`, `-10s`, `+10s`, `Loop`) por canal, barra inferior dedicada en el banco Multimedia y sección de **Producción / Playback Global** para disparar todas las pistas multimedia al unísono.
-- **Grabación Multipista Selectiva (`REC`)**:
-  - Cada canal cuenta con un botón `REC` independiente: solo se graban en archivos `.wav` separados los canales que tienen `REC` activado, más la mezcla maestra opcional.
-- **Procesamiento DSP & Salida de Micrófono Virtual (Discord / OBS)**:
-  - Trim de entrada, Balance estéreo, Inversión de fase (`Ø`), Filtros HPF / LPF, EQ paramétrico de 4 bandas, Noise Gate, Compresor y hasta 4 inserciones VST2/VST3 por canal y en el bus Master.
-  - Botón **Mic Virtual (OBS / Discord)** para digitalizar y enrutar la salida maestra como un micrófono virtual hacia Discord, OBS Studio, Zoom o navegadores.
-- **Barra Inferior Estilo DaVinci Resolve & Biblioteca de Audio**:
-  - Navegación inferior rápida entre **Mixer** y **Biblioteca**.
-  - En **Biblioteca**, explora todas las grabaciones guardadas por el usuario y asígnalas con un clic a un canal Multimedia nuevo o existente.
+- **Arquitectura Nativa JUCE + Rust**:
+  - Interfaz de hardware cuadrada (`0px`) con acentos naranja de estudio (`#F58220`), perillas rotativas, faders metálicos, medidores LED segmentados de 3 colores y decodificación nativa de audio (**WAV, MP3, FLAC, OGG, AIFF**) sin dependencias externas.
+  - Posicionamiento de ventana validado contra todos los monitores activos (`Desktop::getDisplays`), evitando aperturas fuera de pantalla en **Hyprland / Wayland**.
+- **Consola Mixer Profesional (hasta 48 canales)**:
+  - Menú principal a la izquierda (`INICIO`, `FUENTE`, `EQ`, `DINÁMICA`, `PERFILES`, `VST FX`, `E/S & GRAB`, `AJUSTES`, `NOVEDADES`) adaptable a mosaicos estrechos.
+  - Bancos de canales (`CH 1-16`, `CH 17-32`, `CH 33-48`, `MEDIA`, `TODOS`) y **Master Bus** fijado a la derecha con margen de seguridad.
+  - Cadena DSP de latencia cero por canal: Trim, Balance, Fase, HPF/LPF, EQ paramétrico de 4 bandas con **barras LED de saturación en 3 colores (Verde / Amarillo / Rojo)**, Noise Gate, Compresor, De-Esser, Analog Drive, Stereo Delay, Studio Reverb, Peak Limiter y 4 slots VST2/VST3 por canal y en Master.
+  - **23 Perfiles DSP predeterminados** categorizados + importación y exportación de perfiles en formato `.json`.
+  - **Micrófono Virtual (Discord / OBS)** sobre PipeWire y **Grabación Multipista selectiva (`REC`)**.
+  - **Aviso en tiempo de ejecución para `wineg++`**: al intentar cargar un plugin Windows `.dll` o `.vst3` en Linux sin `wineg++` instalado, la aplicación muestra una alerta clara con instrucciones de instalación.
+- **Panel DJ de Doble Bandeja (Deck A + Deck B)**:
+  - Mezcla en vivo dos pistas directamente integradas en el motor maestro (compatible con grabación y Mic Virtual).
+  - Arrastra y suelta o carga pistas **WAV, MP3, FLAC, OGG, AIFF** en Deck A y Deck B.
+  - **Waveforms RGB de 3 bandas** (vista general + zoom desplazable en tiempo real) con búsqueda por clic.
+  - **Jog Wheels interactivos** giratorios para scratch y ajuste fino (pitch bend).
+  - Detección automática de **BPM**, botón **SYNC** entre bandejas, fader de **Pitch (-16% a +16%)**, **CUE**, **4 Hot Cues** por bandeja y **Auto-Loop** (`1/2`, `1`, `2`, `4`, `8`, `16` beats).
+  - Mezclador central DJ con **Trim**, **Isolator EQ de 3 bandas + botones KILL**, **Filtro bipolar color (LPF / HPF)**, medidores LED estéreo, faders de canal, **Crossfader** con 3 curvas (*Smooth Power*, *Lineal*, *Scratch Cut*) y transición automática **Auto-Mix (`<< MIX A` / `MIX B >>`)**.
+- **MIDI Studio**:
+  - Múltiples sesiones MIDI enlazadas como canales del Mixer.
+  - Secuenciador de batería de 16 pasos (`Kick`, `Clap`, `Hat`, `Snare`, `Bass 808`), **Piano Roll** interactivo de 24 semitonos × 16 pasos con playhead en vivo y **teclado virtual** tocable por ratón y teclado físico.
+  - 5 motores sintetizadores (*Studio Keys / Analog Lead*, *Electric Piano FM*, *Warm Saw Pad*, *Pluck Arp*, *808 Sub Bass*).
+- **Biblioteca de Audio**:
+  - Explora grabaciones y colecciones de audio, con asignación en un clic a un **canal del Mixer**, **DJ Deck A** o **DJ Deck B**.
 
 ---
 
-## Empaquetado de Releases (`build-release.sh`)
+## Catálogo de Perfiles DSP Integrados (23 Presets)
 
-Para generar todos los instaladores oficiales de producción (`Chronomix-Setup-Windows-x64.exe`, `Chronomix-Setup-Windows-ARM64.exe` y `Chronomix-Linux-x86_64.tar.gz`) directamente en `./dist/`:
+| Perfil / Preset | Categoría | Uso Recomendado |
+| :--- | :--- | :--- |
+| **Podcast Pro (Voz Broadcast)** | Voz & Podcasts | Podcasts, locución profesional, entrevistas de micrófono cercano |
+| **Voz Radial FM / DJ** | Voz & Podcasts | Locutores de radio, voces enérgicas y contundentes |
+| **Streamer / Directos** | Voz & Podcasts | Directos, partidas de videojuegos y chats de voz |
+| **Voz Cálida Studio** | Voz & Podcasts | Baladas, cantantes solistas, acústicos íntimos |
+| **Voz Brillante Pop** | Voz & Podcasts | Voz líder moderna y pop contemporáneo |
+| **Voz Íntima / ASMR** | Voz & Podcasts | Susurros, foley íntimo y grabaciones binaurales |
+| **Doblaje y Cine** | Voz & Podcasts | Actuación de voz, documentales y doblaje audiovisual |
+| **Guitarra Acústica Natural** | Guitarras & Cuerdas | Guitarras folk y clásicas grabadas con micrófono |
+| **Guitarra Fingerstyle** | Guitarras & Cuerdas | Arpegios y solos acústicos |
+| **Guitarra Eléctrica Rock** | Guitarras & Cuerdas | Solos de rock, riffs potentes y guitarras con sustain |
+| **Guitarra Clean Ambience** | Guitarras & Cuerdas | Acordes limpios, ambient e indie |
+| **Bajo Punch & Slap** | Bajo | Bajos slap funk, pop moderno y rock |
+| **Bajo Cálido Tubo** | Bajo | Soul, R&B, jazz y rock clásico |
+| **Bombo Punch 808** | Batería & Percusión | Bombos acústicos, samples trap/hip hop y bajos 808 |
+| **Caja Snare Crisp** | Batería & Percusión | Cajas de batería con pegada y chasquido nítido |
+| **Platillos / Overheads** | Batería & Percusión | Micrófonos aéreos de batería y platillos |
+| **Piano de Cola Concierto** | Teclados & Orquesta | Pianos acústicos de cola y teclados de escenario |
+| **Cuerdas Sinfónicas** | Teclados & Orquesta | Violines, violas, cellos y arreglos orquestales |
+| **Sintetizador Lead** | Teclados & Orquesta | Sintetizadores lead, plucks y arpegios |
+| **Teléfono Vintage Lofi** | Efectos & Retro | Efecto retro de llamada telefónica y lofi |
+| **Megáfono y Altavoz** | Efectos & Retro | Avisos de megafonía y radio distorsionada |
+| **Mastering Polish Glue** | Mastering & Utilidad | Toque final y pegamento para el bus Master |
+| **Plano / Reset Total** | Mastering & Utilidad | Curva completamente limpia sin procesadores |
+
+---
+
+## Compilar desde el Código Fuente (JUCE + Rust)
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+cargo test --workspace
+```
+
+Para generar el paquete de distribución en `./dist/`:
 
 ```bash
 ./build-release.sh
@@ -63,15 +114,6 @@ Para generar todos los instaladores oficiales de producción (`Chronomix-Setup-W
 
 ---
 
-## Compilar desde el Código Fuente
-
-```bash
-cargo build --release --bin chronomix
-cargo test --workspace
-```
-
----
-
 ## Licencia
 
-Distribuido bajo la licencia **MIT**. Creado por **TheVixcho**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
+Distribuido bajo la licencia **MIT**. Creado por **TheVixcho**. Consulta [LICENSE](LICENSE).
